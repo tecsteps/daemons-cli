@@ -15,8 +15,8 @@ import (
 
 const (
 	spawnResponse   = `{"data":{"id":"daemon-uuid","name":"research","status":"provisioning","primary_agent":"codex","server":{"id":"server-uuid","name":"host","status":"running"},"future_daemon_field":"kept"},"meta":{"operation":{"id":"operation-uuid","type":"daemon.spawn","status":"queued","resource":{"type":"daemon","id":"daemon-uuid"},"result":{},"retryable":false},"future_meta":"kept"},"future_envelope":"kept"}`
-	destroyResponse = `{"data":{"id":"operation-uuid","type":"daemon.destroy","status":"succeeded","resource":{"type":"daemon","id":"daemon-uuid"},"result":{"daemon_status":"destroying"},"retryable":false},"meta":{},"future_envelope":"kept"}`
-	daemonResponse  = `{"data":{"id":"daemon-uuid","name":"research","status":"running","primary_agent":"codex","server":{"id":"server-uuid","name":"host","status":"running"}},"meta":{}}`
+	destroyResponse = `{"data":{"id":"operation-uuid","type":"daemon.destroy","status":"succeeded","resource":{"type":"daemon","id":"daemon-uuid"},"result":{"daemon_status":"destroying"},"retryable":false},"meta":[],"future_envelope":"kept"}`
+	daemonResponse  = `{"data":{"id":"daemon-uuid","name":"research","status":"running","primary_agent":"codex","server":{"id":"server-uuid","name":"host","status":"running"}},"meta":[]}`
 	problemPrefix   = `{"type":"https://daemons.run/problems/`
 )
 
@@ -59,7 +59,7 @@ func itoa(value int) string {
 
 func TestPhaseTwoCommandsPreserveCanonicalJSON(t *testing.T) {
 	operationList := `{"data":[{"id":"operation-uuid","type":"daemon.start","status":"succeeded","resource":{"type":"daemon","id":"daemon-uuid"},"result":{},"retryable":false,"future":"kept"}],"meta":{"next_cursor":null},"future_envelope":"kept"}`
-	retryResponse := `{"data":{"id":"operation-uuid","type":"daemon.retry","status":"succeeded","resource":{"type":"daemon","id":"daemon-uuid"},"result":{},"retryable":false},"meta":{},"future_envelope":"kept"}`
+	retryResponse := `{"data":{"id":"operation-uuid","type":"daemon.retry","status":"succeeded","resource":{"type":"daemon","id":"daemon-uuid"},"result":{},"retryable":false},"meta":[],"future_envelope":"kept"}`
 	tests := []struct {
 		name      string
 		arguments []string
@@ -314,8 +314,8 @@ func TestDestroyPreconditionFailedRefetchesAndDoesNotResubmit(t *testing.T) {
 
 func TestWaitFlagPollsToTerminalState(t *testing.T) {
 	polls := 0
-	running := `{"data":{"id":"operation-uuid","type":"daemon.spawn","status":"running","result":{},"retryable":false},"meta":{}}`
-	succeeded := `{"data":{"id":"operation-uuid","type":"daemon.spawn","status":"succeeded","result":{"daemon_status":"running"},"retryable":false},"meta":{}}`
+	running := `{"data":{"id":"operation-uuid","type":"daemon.spawn","status":"running","result":[],"retryable":false},"meta":[]}`
+	succeeded := `{"data":{"id":"operation-uuid","type":"daemon.spawn","status":"succeeded","result":{"daemon_status":"running"},"retryable":false},"meta":[]}`
 	server, record := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.Method == http.MethodPost:
@@ -353,6 +353,42 @@ func TestWaitFlagPollsToTerminalState(t *testing.T) {
 	}
 	if !strings.Contains(record.requests[len(record.requests)-1], "GET /api/v1/operations/operation-uuid") {
 		t.Fatalf("requests = %v", record.requests)
+	}
+}
+
+func TestJSONWaitPollFailureDoesNotDuplicateInitialDocument(t *testing.T) {
+	invalidPoll := `{"data":{"id":"operation-uuid","type":"daemon.spawn","result":[]},"meta":[]}`
+	server, _ := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			writer.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(writer, spawnResponse)
+			return
+		}
+		_, _ = io.WriteString(writer, invalidPoll)
+	})
+
+	var output, errorOutput bytes.Buffer
+	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
+	dependencies.Sleep = func(context.Context, time.Duration) error { return nil }
+	code := Run(context.Background(), []string{"--json", "--host", server.URL, "spawn", "research", "--server", "11111111-2222-3333-4444-555555555555", "--wait", "--idempotency-key", "phase2-spawn-key"}, dependencies)
+	if code != 1 || strings.Count(output.String(), spawnResponse) != 1 {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %q", code, output.String(), errorOutput.String())
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(output.String()))
+	var initial, problemDocument map[string]any
+	if err := decoder.Decode(&initial); err != nil {
+		t.Fatalf("decode initial document: %v", err)
+	}
+	if err := decoder.Decode(&problemDocument); err != nil {
+		t.Fatalf("decode problem document: %v", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		t.Fatalf("unexpected third JSON document: %#v, %v", extra, err)
+	}
+	if problemDocument["code"] != "invalid_response" || problemDocument["status"] != float64(http.StatusBadGateway) {
+		t.Fatalf("problem = %#v", problemDocument)
 	}
 }
 

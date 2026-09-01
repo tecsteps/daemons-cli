@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -136,17 +137,24 @@ func waitForOperation(ctx context.Context, api *client.Client, initial client.Op
 			}
 		},
 	})
-	if options.JSON {
-		writeCanonicalJSON(dependencies.Output, final.Raw)
-	} else {
-		writeOperation(dependencies, final.Data)
-	}
 	if err != nil {
-		fmt.Fprintf(dependencies.ErrorOutput, "Error [%s]: %s\n", errs.Code(err), sanitizeText(err.Error()))
+		if options.JSON {
+			writeError(dependencies, true, err)
+		} else {
+			writeOperation(dependencies, final.Data)
+			fmt.Fprintf(dependencies.ErrorOutput, "Error [%s]: %s\n", errs.Code(err), sanitizeText(err.Error()))
+		}
 		if errs.ExitCode(err) == 8 {
 			guide.write(dependencies)
 		}
 		return runResult{code: errs.ExitCode(err), err: err, reported: true}
+	}
+	if options.JSON {
+		if !bytes.Equal(bytes.TrimSpace(final.Raw), bytes.TrimSpace(initial.Raw)) {
+			writeCanonicalJSON(dependencies.Output, final.Raw)
+		}
+	} else {
+		writeOperation(dependencies, final.Data)
 	}
 	return operationOutcome(final.Data, options, dependencies, guide)
 }

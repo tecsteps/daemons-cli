@@ -14,9 +14,11 @@ import (
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-const spawnUsage = "Usage: daemons spawn NAME --server SERVER [--agent AGENT] [--disk-quota-gb N] [--wait] [--wait-timeout 10m] [--idempotency-key KEY]"
+const spawnUsage = "Usage: daemons spawn NAME --server SERVER [--agent AGENT] [--disk-quota-gb N] [--wait] [--wait-timeout DURATION] [--idempotency-key KEY]"
 
-const destroyUsage = "Usage: daemons destroy ID [--etag ETAG] [--wait] [--wait-timeout 10m] [--idempotency-key KEY]"
+const destroyUsage = "Usage: daemons destroy ID [--etag ETAG] [--wait] [--wait-timeout DURATION] [--idempotency-key KEY]"
+
+const waitTimeoutHelp = "  --wait-timeout examples: 1s, 10m; bare numbers mean seconds."
 
 func listDaemons(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) error {
 	if helpRequested(arguments) {
@@ -96,9 +98,10 @@ func retryDaemon(ctx context.Context, arguments []string, options globalOptions,
 }
 
 func lifecycleDaemon(ctx context.Context, action string, arguments []string, options globalOptions, dependencies Dependencies) runResult {
-	usage := "Usage: daemons " + action + " ID [--wait] [--wait-timeout 10m] [--idempotency-key KEY]"
+	usage := "Usage: daemons " + action + " ID [--wait] [--wait-timeout DURATION] [--idempotency-key KEY]"
 	if helpRequested(arguments) {
 		fmt.Fprintln(dependencies.Output, usage)
+		fmt.Fprintln(dependencies.Output, waitTimeoutHelp)
 		return runResult{}
 	}
 	flags, err := parseMutationFlags(arguments, nil, usage, options, dependencies)
@@ -131,6 +134,7 @@ func lifecycleDaemon(ctx context.Context, action string, arguments []string, opt
 func spawnDaemon(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) runResult {
 	if helpRequested(arguments) {
 		fmt.Fprintln(dependencies.Output, spawnUsage)
+		fmt.Fprintln(dependencies.Output, waitTimeoutHelp)
 		return runResult{}
 	}
 	flags, err := parseMutationFlags(arguments, []string{"--server", "--agent", "--disk-quota-gb"}, spawnUsage, options, dependencies)
@@ -188,6 +192,7 @@ func spawnDaemon(ctx context.Context, arguments []string, options globalOptions,
 func destroyDaemon(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) runResult {
 	if helpRequested(arguments) {
 		fmt.Fprintln(dependencies.Output, destroyUsage)
+		fmt.Fprintln(dependencies.Output, waitTimeoutHelp)
 		return runResult{}
 	}
 	flags, err := lifecycleArguments(arguments, destroyUsage, options, dependencies)

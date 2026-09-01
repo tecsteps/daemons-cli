@@ -30,10 +30,12 @@ func writeCanonicalJSON(writer io.Writer, raw json.RawMessage) {
 func writeError(dependencies Dependencies, jsonOutput bool, err error) {
 	if jsonOutput {
 		if raw := errs.RawProblem(err); len(raw) > 0 {
-			writeCanonicalJSON(dependencies.Output, sanitizeProblem(raw))
-			return
+			if sanitized := sanitizeProblem(raw); len(sanitized) > 0 {
+				writeCanonicalJSON(dependencies.Output, sanitized)
+				return
+			}
 		}
-		writeJSON(dependencies.Output, map[string]any{"error": map[string]any{"code": errs.Code(err), "message": sanitizeText(err.Error())}})
+		writeJSON(dependencies.Output, canonicalProblem(err))
 		return
 	}
 	fmt.Fprintf(dependencies.ErrorOutput, "Error [%s]: %s\n", errs.Code(err), sanitizeText(err.Error()))
@@ -47,6 +49,89 @@ func writeError(dependencies Dependencies, jsonOutput bool, err error) {
 				fmt.Fprintf(dependencies.ErrorOutput, "  %s: %s\n", field, sanitizeText(message))
 			}
 		}
+	}
+}
+
+type problemDocument struct {
+	Type      string              `json:"type"`
+	Title     string              `json:"title"`
+	Status    int                 `json:"status"`
+	Code      string              `json:"code"`
+	Detail    string              `json:"detail"`
+	RequestID string              `json:"request_id"`
+	Errors    map[string][]string `json:"errors"`
+	Meta      map[string]any      `json:"meta"`
+}
+
+func canonicalProblem(err error) problemDocument {
+	code := errs.Code(err)
+	problem := problemDocument{
+		Type:   "https://daemons.run/problems/" + strings.ReplaceAll(code, "_", "-"),
+		Title:  problemTitle(code),
+		Status: localProblemStatus(err),
+		Code:   code,
+		Detail: sanitizeText(err.Error()),
+		Errors: map[string][]string{},
+		Meta:   map[string]any{},
+	}
+	var apiError *errs.APIError
+	if errors.As(err, &apiError) {
+		problem.RequestID = apiError.RequestID
+		if apiError.Errors != nil {
+			problem.Errors = apiError.Errors
+		}
+		if apiError.Meta != nil {
+			problem.Meta = apiError.Meta
+		}
+	}
+	var cliError *errs.CLIError
+	if errors.As(err, &cliError) {
+		problem.RequestID = cliError.RequestID
+		if cliError.OperationState != "" {
+			problem.Meta["operation_state"] = cliError.OperationState
+		}
+	}
+	return problem
+}
+
+func problemTitle(code string) string {
+	title := strings.ReplaceAll(code, "_", " ")
+	if title == "" {
+		return "CLI error"
+	}
+	return strings.ToUpper(title[:1]) + title[1:]
+}
+
+func localProblemStatus(err error) int {
+	var apiError *errs.APIError
+	if errors.As(err, &apiError) && apiError.Status > 0 {
+		return apiError.Status
+	}
+	switch errs.Code(err) {
+	case "invalid_response":
+		return 502
+	case "network_error":
+		return 503
+	case "outcome_unknown", "wait_timeout":
+		return 504
+	}
+	switch errs.ExitCode(err) {
+	case 2:
+		return 400
+	case 3:
+		return 401
+	case 4:
+		return 404
+	case 5:
+		return 403
+	case 6:
+		return 409
+	case 7:
+		return 429
+	case 8:
+		return 504
+	default:
+		return 500
 	}
 }
 

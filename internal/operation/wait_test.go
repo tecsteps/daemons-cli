@@ -90,6 +90,17 @@ func TestWaitTimesOutWithUnknownOutcome(t *testing.T) {
 	}
 }
 
+func TestWaitDoesNotPollAtTheDeadline(t *testing.T) {
+	now, sleep, _ := fakeClock(time.Unix(0, 0))
+	poller := &fakePoller{responses: []client.OperationEnvelope{envelope("succeeded", "")}}
+	final, err := Wait(context.Background(), poller, envelope("queued", ""), Options{
+		Timeout: time.Second, Now: now, Sleep: sleep, Jitter: func(time.Duration) time.Duration { return 0 },
+	})
+	if errs.Code(err) != "wait_timeout" || errs.ExitCode(err) != 8 || poller.calls != 0 || final.Data.Status != "queued" {
+		t.Fatalf("err = %v, calls = %d, status = %q", err, poller.calls, final.Data.Status)
+	}
+}
+
 func TestWaitStopsLocallyOnCancelWithoutRemoteCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	poller := &fakePoller{responses: []client.OperationEnvelope{envelope("running", "")}}

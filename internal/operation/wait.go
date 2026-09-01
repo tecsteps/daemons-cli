@@ -76,6 +76,9 @@ func Wait(ctx context.Context, poller Poller, initial client.OperationEnvelope, 
 				1,
 			)
 		}
+		if !options.Now().Before(deadline) {
+			return last, timeout(last.Data, options.Timeout)
+		}
 
 		next, err := poller.ShowOperation(ctx, last.Data.ID)
 		if err != nil {

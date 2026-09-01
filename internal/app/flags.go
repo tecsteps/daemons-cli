@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,13 +109,26 @@ func parseMutationFlags(arguments []string, valueFlags []string, usage string, _
 		}
 	}
 	if waitTimeout != "" {
-		parsed, err := time.ParseDuration(waitTimeout)
+		parsed, err := parseWaitTimeout(waitTimeout)
 		if err != nil || parsed <= 0 {
-			return flags, errs.New("usage_error", "--wait-timeout must be a positive duration such as 90s or 10m.", 2)
+			return flags, errs.New("usage_error", "--wait-timeout must be positive; use a duration such as 1s or 10m, or a bare number of seconds.", 2)
 		}
 		flags.WaitTimeout = parsed
 	}
 	return flags, nil
+}
+
+func parseWaitTimeout(value string) (time.Duration, error) {
+	if value != "" && strings.IndexFunc(value, func(character rune) bool {
+		return character < '0' || character > '9'
+	}) == -1 {
+		seconds, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || seconds <= 0 || seconds > int64((1<<63-1)/time.Second) {
+			return 0, errs.New("usage_error", "invalid wait timeout", 2)
+		}
+		return time.Duration(seconds) * time.Second, nil
+	}
+	return time.ParseDuration(value)
 }
 
 // ensureIdempotencyKey applies the Phase 1 key contract after local argument
