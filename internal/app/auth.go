@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/tecsteps/daemons-cli/internal/client"
@@ -22,15 +24,20 @@ var defaultScopes = []string{
 	"terminal:connect",
 }
 
+const loginUsage = "Usage: daemons login [--scope SCOPE] [--lifetime 7d] | daemons login --token-stdin"
+
 func login(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) error {
 	if helpRequested(arguments) {
-		fmt.Fprintln(dependencies.Output, "Usage: daemons login [--scope SCOPE] [--lifetime 7d]")
+		fmt.Fprintln(dependencies.Output, loginUsage)
 		return nil
 	}
 	scopes := []string{}
 	lifetime := "7d"
+	tokenFromStdin := false
 	for index := 0; index < len(arguments); index++ {
 		switch arguments[index] {
+		case "--token-stdin":
+			tokenFromStdin = true
 		case "--scope":
 			if index+1 >= len(arguments) {
 				return errs.New("usage_error", "--scope requires a value.", 2)
@@ -44,8 +51,14 @@ func login(ctx context.Context, arguments []string, options globalOptions, depen
 			lifetime = arguments[index+1]
 			index++
 		default:
-			return errs.New("usage_error", "Usage: daemons login [--scope SCOPE] [--lifetime 7d]", 2)
+			return errs.New("usage_error", loginUsage, 2)
 		}
+	}
+	if tokenFromStdin {
+		if len(scopes) != 0 || lifetime != "7d" {
+			return errs.New("usage_error", "--token-stdin stores an existing token; --scope and --lifetime apply only to the device flow.", 2)
+		}
+		return loginWithStdinToken(ctx, options, dependencies)
 	}
 	if len(scopes) == 0 {
 		scopes = append(scopes, defaultScopes...)
@@ -92,35 +105,60 @@ func login(ctx context.Context, arguments []string, options globalOptions, depen
 			if err != nil {
 				return err
 			}
-			identity, err := authenticated.Me(ctx)
-			if err != nil {
-				return err
-			}
-			store, err := credentialStore(options, dependencies.Environment)
-			if err != nil {
-				return err
-			}
-			if err := store.Save(credentials.Credential{
-				BaseURL:      normalized,
-				Token:        status.Data.AccessToken,
-				AccountEmail: identity.Data.Account.Email,
-				ExpiresAt:    identity.Data.Token.ExpiresAt,
-			}); err != nil {
-				return errs.New("credential_write_failed", "Could not store credentials in the owner-only credential file.", 1)
-			}
-
-			if options.JSON {
-				writeJSON(dependencies.Output, map[string]any{"data": map[string]any{"status": "approved", "email": identity.Data.Account.Email}, "meta": map[string]any{}})
-			} else {
-				fmt.Fprintf(dependencies.Output, "Logged in as %s.\n", identity.Data.Account.Email)
-			}
-			return nil
+			return verifyAndStoreToken(ctx, authenticated, normalized, status.Data.AccessToken, "approved", options, dependencies)
 		} else if status.Data.Status != "pending" {
 			return errs.New("invalid_device_authorization", "The Control Plane returned an invalid device authorization status.", 1)
 		}
 	}
 
 	return errs.New("authorization_expired", "The device authorization expired before approval.", 3)
+}
+
+// loginWithStdinToken reads one token line from stdin, verifies it against
+// /me, and stores it under the normalized host. The token is never accepted
+// as an argument, never echoed, and never written anywhere but the store.
+func loginWithStdinToken(ctx context.Context, options globalOptions, dependencies Dependencies) error {
+	if dependencies.IsInteractive() && !options.Quiet {
+		fmt.Fprintln(dependencies.ErrorOutput, "Reading the Control Plane token from stdin (one line, then Ctrl-D)...")
+	}
+	raw, err := io.ReadAll(io.LimitReader(dependencies.Input, 4097))
+	if err != nil {
+		return errs.New("token_unreadable", "Could not read the token from stdin.", 2)
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" || len(raw) > 4096 || strings.ContainsAny(token, " \t\r\n") {
+		return errs.New("invalid_token_input", "stdin must contain exactly one token on a single line.", 2)
+	}
+	api, normalized, err := newClient(options.Host, token, options, dependencies)
+	if err != nil {
+		return err
+	}
+	return verifyAndStoreToken(ctx, api, normalized, token, "stored", options, dependencies)
+}
+
+func verifyAndStoreToken(ctx context.Context, api *client.Client, normalized, token, status string, options globalOptions, dependencies Dependencies) error {
+	identity, err := api.Me(ctx)
+	if err != nil {
+		return err
+	}
+	store, err := credentialStore(options, dependencies.Environment)
+	if err != nil {
+		return err
+	}
+	if err := store.Save(credentials.Credential{
+		BaseURL:      normalized,
+		Token:        token,
+		AccountEmail: identity.Data.Account.Email,
+		ExpiresAt:    identity.Data.Token.ExpiresAt,
+	}); err != nil {
+		return errs.New("credential_write_failed", "Could not store credentials in the owner-only credential file.", 1)
+	}
+	if options.JSON {
+		writeJSON(dependencies.Output, map[string]any{"data": map[string]any{"status": status, "email": identity.Data.Account.Email, "host": normalized}, "meta": map[string]any{}})
+	} else {
+		fmt.Fprintf(dependencies.Output, "Logged in as %s at %s.\n", identity.Data.Account.Email, normalized)
+	}
+	return nil
 }
 
 func logout(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) error {
@@ -131,7 +169,7 @@ func logout(ctx context.Context, arguments []string, options globalOptions, depe
 	if len(arguments) != 0 {
 		return errs.New("usage_error", "Usage: daemons logout", 2)
 	}
-	api, _, store, err := authenticatedClient(options, dependencies)
+	api, normalized, store, err := authenticatedClient(options, dependencies)
 	if err != nil {
 		return err
 	}
@@ -147,7 +185,7 @@ func logout(ctx context.Context, arguments []string, options globalOptions, depe
 	}
 	usedEnvironmentToken := dependencies.Environment["DAEMONS_TOKEN"] != ""
 	if !usedEnvironmentToken {
-		if err := store.Delete(); err != nil {
+		if err := store.Delete(normalized); err != nil {
 			return errs.New("credential_delete_failed", "The token was revoked, but the local credential file could not be removed.", 1)
 		}
 	}
@@ -219,39 +257,60 @@ func capabilities(ctx context.Context, arguments []string, options globalOptions
 	return nil
 }
 
-func authenticatedClient(options globalOptions, dependencies Dependencies) (*client.Client, string, credentials.Store, error) {
+func authenticatedClient(options globalOptions, dependencies Dependencies) (*client.Client, string, credentials.Backend, error) {
 	store, err := credentialStore(options, dependencies.Environment)
 	if err != nil {
 		return nil, "", store, err
 	}
-	baseURL := options.Host
 	token := dependencies.Environment["DAEMONS_TOKEN"]
+	baseURL := options.Host
 	if token == "" {
-		credential, loadErr := store.Load()
+		if baseURL == "" {
+			baseURL, err = defaultStoredHost(store)
+			if err != nil {
+				return nil, "", store, err
+			}
+		}
+		normalized, normalizeErr := client.NormalizeBaseURL(baseURL)
+		if normalizeErr != nil {
+			return nil, "", store, normalizeErr
+		}
+		credential, loadErr := store.Load(normalized)
 		if loadErr != nil {
 			if errors.Is(loadErr, fs.ErrNotExist) {
-				return nil, "", store, errs.New("authentication_required", "No Control Plane token is available. Run daemons login.", 3)
+				return nil, "", store, errs.New("authentication_required", "No Control Plane token is stored for "+normalized+". Run daemons login --host "+normalized+".", 3)
 			}
 			return nil, "", store, errs.New("credential_read_failed", "Could not read the protected credential file.", 3)
 		}
-		if baseURL == "" {
-			baseURL = credential.BaseURL
-		} else {
-			normalized, normalizeErr := client.NormalizeBaseURL(baseURL)
-			if normalizeErr != nil {
-				return nil, "", store, normalizeErr
-			}
-			if normalized != credential.BaseURL {
-				return nil, "", store, errs.New("credential_host_mismatch", "Stored credentials belong to a different Control Plane host.", 3)
-			}
-		}
 		token = credential.Token
 		if expiresAt, parseErr := time.Parse(time.RFC3339, credential.ExpiresAt); parseErr == nil && !dependencies.Now().Before(expiresAt) {
-			return nil, "", store, errs.New("authentication_expired", "The Control Plane token has expired. Run daemons login.", 3)
+			return nil, "", store, errs.New("authentication_expired", "The Control Plane token for "+normalized+" has expired. Run daemons login.", 3)
 		}
 	}
 	api, normalized, err := newClient(baseURL, token, options, dependencies)
 	return api, normalized, store, err
+}
+
+// defaultStoredHost picks the host when none was given: the production host
+// when it has a credential, otherwise the only stored host. Two or more
+// non-production hosts are ambiguous and need an explicit --host.
+func defaultStoredHost(store credentials.Backend) (string, error) {
+	hosts, err := store.Hosts()
+	if err != nil {
+		return "", errs.New("credential_read_failed", "Could not read the protected credential file.", 3)
+	}
+	switch {
+	case len(hosts) == 0:
+		return client.DefaultBaseURL, nil
+	case len(hosts) == 1:
+		return hosts[0], nil
+	}
+	for _, host := range hosts {
+		if host == client.DefaultBaseURL {
+			return host, nil
+		}
+	}
+	return "", errs.New("credential_host_ambiguous", "Credentials are stored for several hosts ("+strings.Join(hosts, ", ")+"). Pass --host or set DAEMONS_HOST.", 3)
 }
 
 func newClient(baseURL, token string, global globalOptions, dependencies Dependencies) (*client.Client, string, error) {
@@ -273,7 +332,7 @@ func newClient(baseURL, token string, global globalOptions, dependencies Depende
 	return api, normalized, err
 }
 
-func credentialStore(options globalOptions, environment map[string]string) (credentials.Store, error) {
+func credentialStore(options globalOptions, environment map[string]string) (credentials.Backend, error) {
 	path := options.CredentialsFile
 	if path == "" {
 		var err error

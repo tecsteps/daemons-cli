@@ -73,7 +73,7 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 	if strings.Contains(output.String(), "dr_cp_login_token") {
 		t.Fatal("login output exposed the token")
 	}
-	credential, err := (credentials.Store{Path: credentialPath}).Load()
+	credential, err := (credentials.Store{Path: credentialPath}).Load(normalizedHost(t, server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

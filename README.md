@@ -88,6 +88,25 @@ Run `daemons help` for the full list. Every command accepts `--help`. Global opt
 
 `daemons show ID` prints the daemon's current `ETag`; `daemons destroy` uses that value for its conditional delete.
 
+### Tasks, files, and logs
+
+Tasks, workspace listings, and logs are always addressed through their daemon. `DAEMON` is the daemon UUID or its exact name.
+
+| Command | API route | Scope |
+| --- | --- | --- |
+| `daemons task run DAEMON (PROMPT \| -) [--agent AGENT] [--model MODEL] [--permission-mode yolo\|approval-auto-deny] [--working-directory /workspace/DIR] [--timeout SECONDS]` | `POST /api/v1/daemons/{daemon}/tasks` | `tasks:write` |
+| `daemons task show DAEMON TASK` | `GET /api/v1/daemons/{daemon}/tasks/{task}` | `tasks:read` |
+| `daemons task list DAEMON [--limit N]` | `GET /api/v1/daemons/{daemon}/tasks` | `tasks:read` |
+| `daemons task cancel DAEMON TASK` | `POST /api/v1/daemons/{daemon}/tasks/{task}/cancel` | `tasks:cancel` |
+| `daemons files list DAEMON [PATH] [--cursor CURSOR] [--limit N] [--all]` | `GET /api/v1/daemons/{daemon}/files` | `files:read` |
+| `daemons logs DAEMON --source agent\|app\|daemon\|provisioning [--level LEVEL] [--cursor CURSOR] [--limit N]` | `GET /api/v1/daemons/{daemon}/logs` | `logs:read` |
+
+Pass `-` as the prompt to read it from stdin (`cat brief.md | daemons task run research -`), which keeps it out of shell history and process listings. `task run` and `task cancel` are mutations and follow the idempotency-key rules below; a Codex task in YOLO mode may answer `confirmation_required`. A task that ended `failed`, `cancelled`, or `timed_out` makes `task show` exit 1 under the task's `error_code`. There is no `--wait` or `--follow` for tasks yet: poll with `task show`.
+
+`files list` is an inventory only (name, type, size, mtime); it never downloads content. One page is printed per call with the next cursor on stderr; `--all` follows cursors for up to 50 pages and then stops with a resumable cursor. In `--json` mode every page is written as its own canonical document.
+
+`logs` prints one bounded, server-redacted snapshot. `--source` is required and validated locally against the closed set; `--follow` is refused because the Control Plane has no log event route yet. Rerun with the printed `--cursor` to read newer lines.
+
 ### Mutations
 
 Every mutation takes `--idempotency-key KEY` (8 to 128 characters of letters, digits, `.`, `_`, `:`, `-`). Interactively the CLI generates one, prints it on stderr before submitting, and reuses it for the whole command. With `--json` or without a terminal an explicit key is required, so a script can never retry under a fresh key by accident. Every mutation also performs the API version preflight (`GET /api/v1`, scope `control-plane:discover`).
@@ -115,6 +134,16 @@ Outcomes: `partially_succeeded` is reported as a failure (exit 1) with the opera
 When the API answers `409 confirmation_required` (for example on `daemons destroy`), nothing has changed. The CLI prints the safe summary, the approval URL, the expiry and the confirmation ID, and exits 6. In an interactive terminal it offers to open the approval URL in your browser; opening it is never treated as consent, and the CLI never polls or approves on your behalf. Approve in the browser, then run the same command again. With `--json` the canonical problem document is written to stdout and no browser is opened.
 
 When a mutation's outcome cannot be determined (a transport failure after dispatch, an invalid response, or an operation ending in `outcome_unknown`), the CLI exits 8 and prints the reconciliation step to run first (for example `daemons list` after a spawn, `daemons show ID` after a lifecycle action) and the exact replay command with the original idempotency key. It never retries a possibly destructive or billable mutation on its own, and never under a new key.
+
+### Authentication and credentials
+
+`daemons login` runs the device flow. `daemons login --token-stdin` reads an existing Control Plane token from stdin instead (one line), verifies it with `GET /api/v1/me`, and stores it; a token is never accepted as an argument and never echoed. `DAEMONS_TOKEN` in the environment overrides the store for CI and is never written to disk.
+
+Credentials live in an owner-only file (`~/.config/daemons/credentials.json`, or `DAEMONS_CREDENTIALS_FILE`) keyed by normalized host, so logging in to a second `--host` never overwrites the first. Without `--host` or `DAEMONS_HOST` the CLI uses the production host when it has a credential, otherwise the only stored host; two or more non-production hosts require an explicit `--host`. `daemons logout` revokes and removes only the current host's credential. A credential file from an older release is migrated on the next login.
+
+### Terminal attach
+
+`daemons attach DAEMON [--session NAME]` requires the ticket to advertise the `takeover_v1` terminal feature; if the Control Plane does not, attach refuses (exit 2) before connecting instead of guessing at the gateway's behaviour. Raw terminal mode is restored on every exit path, including a panic.
 
 ### Exit codes
 
