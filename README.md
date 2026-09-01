@@ -57,10 +57,12 @@ This is the supported installation path. It needs neither Go, Node, a package ma
    export PATH="$HOME/.local/bin:$PATH"
    ```
 
-4. On macOS, Gatekeeper can block this temporary unsigned, unnotarized beta because downloaded files receive the `com.apple.quarantine` attribute. After the checksum succeeds, remove that attribute from the installed binary:
+4. On macOS, Gatekeeper can block this temporary unsigned, unnotarized beta when the downloaded file has the `com.apple.quarantine` attribute. After the checksum succeeds, remove the attribute only when it is present:
 
    ```sh
-   xattr -d com.apple.quarantine "$HOME/.local/bin/daemons"
+   if xattr -p com.apple.quarantine "$HOME/.local/bin/daemons" >/dev/null 2>&1; then
+       xattr -d com.apple.quarantine "$HOME/.local/bin/daemons"
+   fi
    ```
 
    This is a temporary beta fallback while Developer ID signing and Apple notarization credentials are unavailable. It is not needed for a future signed and notarized release.
@@ -123,7 +125,7 @@ Every mutation takes `--idempotency-key KEY` (8 to 128 characters of letters, di
 
 ### Waiting for operations
 
-Add `--wait` to any mutation to poll its operation until it reaches a terminal state (`succeeded`, `failed`, `partially_succeeded`, `cancelled`, `timed_out`, or `outcome_unknown`). Polling honours `Retry-After`, otherwise backs off from 2s to 15s with jitter. `--wait-timeout` bounds the wait (default `10m`). Ctrl-C stops waiting locally; it never cancels the operation on the server.
+Add `--wait` to any mutation to poll its operation until it reaches a terminal state (`succeeded`, `failed`, `partially_succeeded`, `cancelled`, `timed_out`, or `outcome_unknown`). Polling honours `Retry-After`, otherwise backs off from 2s to 15s with jitter. `--wait-timeout` bounds the wait (default `10m`); use a duration such as `1s` or `10m`, or a bare number of seconds such as `90`. Ctrl-C stops waiting locally; it never cancels the operation on the server.
 
 In `--json` mode with `--wait`, stdout carries the mutation's document first and, once polling ends, the final operation document on its own line. Progress lines go to stderr and are suppressed by `--quiet`.
 
