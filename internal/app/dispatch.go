@@ -37,6 +37,12 @@ var commandRegistry = map[string]commandHandler{
 	"operations show": showOperation,
 	"attach":          errorHandler(attach),
 	"upload":          uploadFiles,
+	"task run":        runTask,
+	"task show":       showTask,
+	"task cancel":     cancelTask,
+	"task list":       errorHandler(listTasks),
+	"files list":      errorHandler(listFiles),
+	"logs":            errorHandler(showLogs),
 }
 
 func dispatch(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) runResult {

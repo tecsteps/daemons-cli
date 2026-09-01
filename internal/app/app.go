@@ -21,7 +21,7 @@ import (
 const help = `Usage: daemons <command> [options]
 
 Commands:
-  login [--scope SCOPE] [--lifetime 7d]
+  login [--scope SCOPE] [--lifetime 7d] | login --token-stdin
   logout
   whoami
   capabilities
@@ -36,6 +36,12 @@ Commands:
   operations show ID
   attach DAEMON [--session NAME]
   upload DAEMON PATH...
+  task run DAEMON (PROMPT | -) [--agent AGENT] [--model MODEL] [--permission-mode MODE]
+  task show DAEMON TASK
+  task cancel DAEMON TASK
+  task list DAEMON [--limit N]
+  files list DAEMON [PATH] [--cursor CURSOR] [--limit N] [--all]
+  logs DAEMON --source agent|app|daemon|provisioning [--level LEVEL] [--cursor CURSOR] [--limit N]
 
 Mutation options: --idempotency-key KEY --wait --wait-timeout 10m
 Global options: --json --quiet --host URL --no-color --request-id ID --version`
