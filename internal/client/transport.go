@@ -102,9 +102,9 @@ func (c *Client) doJSONWithHeaders(
 	response, err := c.http.Do(request)
 	if err != nil {
 		if idempotencyKey != "" {
-			return errs.New("outcome_unknown", "The mutation outcome is unknown. Reconcile the resource before retrying with the same idempotency key.", 8)
+			return errs.New("outcome_unknown", "The mutation outcome at "+c.baseURL.String()+" is unknown. Reconcile the resource before retrying with the same idempotency key.", 8)
 		}
-		return errs.New("network_error", "Unable to reach the daemons.run Control Plane API.", 1)
+		return errs.New("network_error", "Unable to reach the Control Plane API at "+c.baseURL.String()+".", 1)
 	}
 	defer response.Body.Close()
 	c.observeLifecycleHeaders(response)
@@ -121,15 +121,16 @@ func (c *Client) doJSONWithHeaders(
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumJSONResponse+1))
 	if err != nil || len(raw) > maximumJSONResponse || !json.Valid(raw) {
 		if idempotencyKey != "" {
-			return errs.New("outcome_unknown", "The mutation was accepted but its response was invalid. Reconcile the resource before retrying with the same idempotency key.", 8)
+			return invalidMutationResponse("response body")
 		}
-		return errs.New("invalid_response", "The Control Plane API returned invalid JSON.", 1)
+		return invalidResponse("response body")
 	}
-	if err := json.Unmarshal(raw, result); err != nil {
+	if err := decodeResponseJSON(raw, result); err != nil {
+		field := responseErrorField(err)
 		if idempotencyKey != "" {
-			return errs.New("outcome_unknown", "The mutation was accepted but its response was invalid. Reconcile the resource before retrying with the same idempotency key.", 8)
+			return invalidMutationResponse(field)
 		}
-		return errs.New("invalid_response", "The Control Plane API returned invalid JSON.", 1)
+		return invalidResponse(field)
 	}
 	if envelope, ok := result.(rawEnvelope); ok {
 		envelope.setRaw(append(json.RawMessage(nil), raw...))
@@ -256,13 +257,25 @@ func decodeAPIError(response *http.Response) error {
 	}
 	if len(raw) <= maximumJSONResponse && json.Valid(raw) {
 		apiError.Raw = append(json.RawMessage(nil), raw...)
-		_ = json.Unmarshal(raw, apiError)
+		_ = decodeResponseJSON(raw, apiError)
 	}
 	apiError.Status = response.StatusCode
 	if apiError.RequestID == "" {
 		apiError.RequestID = response.Header.Get("X-Request-Id")
 	}
 	return apiError
+}
+
+func responseErrorField(err error) string {
+	var shapeError *responseShapeError
+	if errors.As(err, &shapeError) && shapeError.field != "" {
+		return shapeError.field
+	}
+	var typeError *json.UnmarshalTypeError
+	if errors.As(err, &typeError) && typeError.Field != "" {
+		return typeError.Field
+	}
+	return "response body"
 }
 
 func (c *Client) upload(ctx context.Context, daemonID, filename string, file *os.File) (UploadResponse, error) {

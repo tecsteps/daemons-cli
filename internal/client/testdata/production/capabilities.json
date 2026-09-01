@@ -1,0 +1,1 @@
+{"data":[{"name":"servers","enabled":true,"reason":null,"dependencies":["servers:read"]},{"name":"daemons","enabled":true,"reason":null,"dependencies":["daemons:read"]},{"name":"operations","enabled":true,"reason":null,"dependencies":["operations:read"]},{"name":"terminal","enabled":true,"reason":null,"dependencies":["terminal:connect"]}],"meta":[]}

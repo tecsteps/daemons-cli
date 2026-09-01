@@ -1,0 +1,1 @@
+{"data":{"id":"01a04d0d-852a-7323-b07f-aec844e9a8f3","type":"daemon.restart","status":"succeeded","resource":{"type":"daemon","id":"01a034c7-f779-734a-8e45-73dbd3afcd33"},"result":[],"error_code":null,"retryable":false,"created_at":"2026-09-01T12:00:00+00:00","updated_at":"2026-09-01T12:00:01+00:00"},"meta":[]}

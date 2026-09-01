@@ -27,7 +27,7 @@ func TestPhaseOneCommandsPreserveCanonicalJSON(t *testing.T) {
 			arguments: []string{"capabilities"},
 			method:    http.MethodGet,
 			path:      "/api/v1/capabilities",
-			response:  `{"data":[{"name":"servers","enabled":true,"reason":null,"dependencies":["servers:read"],"future_capability_field":"kept"}],"meta":{},"future_envelope":"kept"}`,
+			response:  `{"data":[{"name":"servers","enabled":true,"reason":null,"dependencies":["servers:read"],"future_capability_field":"kept"}],"meta":[],"future_envelope":"kept"}`,
 		},
 		{
 			name:      "servers list",
@@ -41,14 +41,14 @@ func TestPhaseOneCommandsPreserveCanonicalJSON(t *testing.T) {
 			arguments: []string{"servers", "show", "server-uuid"},
 			method:    http.MethodGet,
 			path:      "/api/v1/servers/server-uuid",
-			response:  `{"data":{"id":"server-uuid","name":"host","status":"running","region":"fsn1","capacity":{"cores":4,"memory_gb":8,"disk_gb":80,"daemon_count":1,"eligible_for_daemon":true},"future_server_field":"kept"},"meta":{},"future_envelope":"kept"}`,
+			response:  `{"data":{"id":"server-uuid","name":"host","status":"running","region":"fsn1","capacity":{"cores":4,"memory_gb":"8.00","disk_gb":80,"daemon_count":1,"eligible_for_daemon":true},"future_server_field":"kept"},"meta":[],"future_envelope":"kept"}`,
 		},
 		{
 			name:      "daemons show",
 			arguments: []string{"daemons", "show", "daemon-uuid"},
 			method:    http.MethodGet,
 			path:      "/api/v1/daemons/daemon-uuid",
-			response:  `{"data":{"id":"daemon-uuid","name":"research","status":"running","primary_agent":"codex","server":{"id":"server-uuid","name":"host","status":"running"},"future_daemon_field":"kept"},"meta":{},"future_envelope":"kept"}`,
+			response:  `{"data":{"id":"daemon-uuid","name":"research","status":"running","primary_agent":"codex","server":{"id":"server-uuid","name":"host","status":"running"},"future_daemon_field":"kept"},"meta":[],"future_envelope":"kept"}`,
 		},
 		{
 			name:         "daemons start",

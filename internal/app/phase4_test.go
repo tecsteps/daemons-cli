@@ -17,7 +17,7 @@ import (
 	"github.com/tecsteps/daemons-cli/internal/upload"
 )
 
-const meResponse = `{"data":{"account":{"id":"user-uuid","email":"developer@example.test","control_plane_api_enabled":true},"token":{"id":"token-uuid","name":"CLI","scopes":[],"expires_at":"2030-01-01T00:00:00Z"}},"meta":{}}`
+const meResponse = `{"data":{"account":{"id":"user-uuid","email":"developer@example.test","control_plane_api_enabled":true},"token":{"id":"token-uuid","name":"CLI","scopes":[],"restrictions":[],"expires_at":"2030-01-01T00:00:00Z"}},"meta":[]}`
 
 func normalizedHost(t *testing.T, raw string) string {
 	t.Helper()

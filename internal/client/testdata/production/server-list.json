@@ -1,0 +1,1 @@
+{"data":[{"id":"01a034a7-cd63-717c-b843-5f575959ec52","name":"production-server","status":"running","region":"fsn1","capacity":{"cores":2,"memory_gb":"4.00","disk_gb":80,"daemon_count":1,"eligible_for_daemon":true},"created_at":"2026-08-30T12:00:00+00:00","updated_at":"2026-09-01T12:00:00+00:00"}],"meta":{"next_cursor":null}}

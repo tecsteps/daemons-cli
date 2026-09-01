@@ -1,0 +1,1 @@
+{"data":{"account":{"id":"01a00000-0000-7000-8000-000000000001","email":"owner@example.test","control_plane_api_enabled":true},"token":{"id":"01a00000-0000-7000-8000-000000000002","name":"cli-verify-mtj627ic","last_eight":"test1234","scopes":["control-plane:discover","servers:read","daemons:read"],"restrictions":[],"expires_at":"2026-09-08T12:00:00+00:00"}},"meta":[]}

@@ -1,0 +1,1 @@
+{"data":{"id":"01a05f00-0000-7000-8000-000000000001","type":"daemon.destroy","status":"succeeded","resource":{"type":"daemon","id":"01a05ed6-dc52-734b-9dbf-2d224210ae8d"},"result":{"daemon_status":"destroyed"},"error_code":null,"retryable":false,"created_at":"2026-09-01T12:20:00+00:00","updated_at":"2026-09-01T12:20:01+00:00"},"meta":[]}

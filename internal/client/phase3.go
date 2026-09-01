@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,7 +19,7 @@ type Task struct {
 	Model             *string        `json:"model"`
 	PermissionMode    string         `json:"permission_mode"`
 	WorkingDirectory  string         `json:"working_directory"`
-	TimeoutSeconds    int            `json:"timeout_seconds"`
+	TimeoutSeconds    WireInt        `json:"timeout_seconds"`
 	Status            string         `json:"status"`
 	Result            map[string]any `json:"result"`
 	ErrorCode         *string        `json:"error_code"`
@@ -58,10 +59,10 @@ type TaskRequest struct {
 }
 
 type FileEntry struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Size  int64  `json:"size"`
-	MTime int64  `json:"mtime"`
+	Name  string  `json:"name"`
+	Type  string  `json:"type"`
+	Size  WireInt `json:"size"`
+	MTime WireInt `json:"mtime"`
 }
 
 type FileList struct {
@@ -113,8 +114,10 @@ func (c *Client) CreateTask(ctx context.Context, daemonID string, task TaskReque
 	}
 	var result TaskEnvelope
 	err := c.doJSON(ctx, http.MethodPost, "/daemons/"+url.PathEscape(daemonID)+"/tasks", body, true, idempotencyKey, true, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Status == "") {
-		return TaskEnvelope{}, invalidMutationResponse()
+	if err == nil {
+		if field := missingTaskField(result.Data); field != "" {
+			return TaskEnvelope{}, invalidMutationResponse("data." + field)
+		}
 	}
 	return result, err
 }
@@ -127,9 +130,9 @@ func (c *Client) ListTasks(ctx context.Context, daemonID string, limit int) (Tas
 	var result TaskList
 	err := c.doJSON(ctx, http.MethodGet, requestPath, nil, true, "", false, &result)
 	if err == nil {
-		for _, task := range result.Data {
-			if task.ID == "" || task.Status == "" {
-				return TaskList{}, invalidResponse()
+		for index, task := range result.Data {
+			if field := missingTaskField(task); field != "" {
+				return TaskList{}, invalidResponse(fmt.Sprintf("data[%d].%s", index, field))
 			}
 		}
 	}
@@ -139,8 +142,10 @@ func (c *Client) ListTasks(ctx context.Context, daemonID string, limit int) (Tas
 func (c *Client) ShowTask(ctx context.Context, daemonID, taskID string) (TaskEnvelope, error) {
 	var result TaskEnvelope
 	err := c.doJSON(ctx, http.MethodGet, "/daemons/"+url.PathEscape(daemonID)+"/tasks/"+url.PathEscape(taskID), nil, true, "", false, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Status == "") {
-		return TaskEnvelope{}, invalidResponse()
+	if err == nil {
+		if field := missingTaskField(result.Data); field != "" {
+			return TaskEnvelope{}, invalidResponse("data." + field)
+		}
 	}
 	return result, err
 }
@@ -151,8 +156,10 @@ func (c *Client) CancelTask(ctx context.Context, daemonID, taskID, idempotencyKe
 	}
 	var result TaskEnvelope
 	err := c.doJSON(ctx, http.MethodPost, "/daemons/"+url.PathEscape(daemonID)+"/tasks/"+url.PathEscape(taskID)+"/cancel", nil, true, idempotencyKey, true, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Status == "") {
-		return TaskEnvelope{}, invalidMutationResponse()
+	if err == nil {
+		if field := missingTaskField(result.Data); field != "" {
+			return TaskEnvelope{}, invalidMutationResponse("data." + field)
+		}
 	}
 	return result, err
 }
@@ -177,13 +184,28 @@ func (c *Client) ListFiles(ctx context.Context, daemonID, workspacePath, cursor 
 	var result FileList
 	err := c.doJSON(ctx, http.MethodGet, requestPath, nil, true, "", false, &result)
 	if err == nil {
-		for _, entry := range result.Data {
+		for index, entry := range result.Data {
 			if entry.Name == "" || entry.Type == "" {
-				return FileList{}, invalidResponse()
+				field := "name"
+				if entry.Name != "" {
+					field = "type"
+				}
+				return FileList{}, invalidResponse(fmt.Sprintf("data[%d].%s", index, field))
 			}
 		}
 	}
 	return result, err
+}
+
+func missingTaskField(task Task) string {
+	switch {
+	case task.ID == "":
+		return "id"
+	case task.Status == "":
+		return "status"
+	default:
+		return ""
+	}
 }
 
 // ListLogs reads one bounded, server-redacted log snapshot. The source is

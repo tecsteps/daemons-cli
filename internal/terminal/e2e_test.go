@@ -46,11 +46,11 @@ func TestAttachNegotiatesTicketForwardsBytesResizesAndDetaches(t *testing.T) {
 				"data": map[string]any{
 					"gateway_url":       "ws" + strings.TrimPrefix(server.URL, "http") + "/term",
 					"ticket":            "fake.ticket",
-					"expires_in":        30,
-					"terminal_protocol": 1,
+					"expires_in":        "30.00",
+					"terminal_protocol": "1",
 					"features":          []string{"takeover_v1"},
 				},
-				"meta": map[string]any{},
+				"meta": []any{},
 			})
 
 		case "/term":

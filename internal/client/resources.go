@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -107,11 +108,11 @@ type Server struct {
 	Status   string `json:"status"`
 	Region   string `json:"region"`
 	Capacity struct {
-		Cores             int  `json:"cores"`
-		MemoryGB          int  `json:"memory_gb"`
-		DiskGB            int  `json:"disk_gb"`
-		DaemonCount       int  `json:"daemon_count"`
-		EligibleForDaemon bool `json:"eligible_for_daemon"`
+		Cores             WireInt `json:"cores"`
+		MemoryGB          WireInt `json:"memory_gb"`
+		DiskGB            WireInt `json:"disk_gb"`
+		DaemonCount       WireInt `json:"daemon_count"`
+		EligibleForDaemon bool    `json:"eligible_for_daemon"`
 	} `json:"capacity"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
@@ -186,13 +187,16 @@ func (response *OperationList) setRaw(raw json.RawMessage) { response.Raw = raw 
 
 type DeviceAuthorization struct {
 	Data struct {
-		DeviceCode      string `json:"device_code"`
-		VerificationURL string `json:"verification_url"`
-		ExpiresAt       string `json:"expires_at"`
-		IntervalSeconds int    `json:"interval_seconds"`
+		DeviceCode      string  `json:"device_code"`
+		VerificationURL string  `json:"verification_url"`
+		ExpiresAt       string  `json:"expires_at"`
+		IntervalSeconds WireInt `json:"interval_seconds"`
 	} `json:"data"`
-	Meta map[string]any `json:"meta"`
+	Meta map[string]any  `json:"meta"`
+	Raw  json.RawMessage `json:"-"`
 }
+
+func (response *DeviceAuthorization) setRaw(raw json.RawMessage) { response.Raw = raw }
 
 type DeviceAuthorizationStatus struct {
 	Data struct {
@@ -207,8 +211,8 @@ type Ticket struct {
 	Data struct {
 		GatewayURL string   `json:"gateway_url"`
 		Ticket     string   `json:"ticket"`
-		ExpiresIn  int      `json:"expires_in"`
-		Protocol   int      `json:"terminal_protocol"`
+		ExpiresIn  WireInt  `json:"expires_in"`
+		Protocol   WireInt  `json:"terminal_protocol"`
 		Features   []string `json:"features"`
 	} `json:"data"`
 	Meta map[string]any `json:"meta"`
@@ -226,18 +230,39 @@ func (c *Client) CreateDeviceAuthorization(ctx context.Context, scopes []string,
 		"scopes":   scopes,
 		"lifetime": lifetime,
 	}, false, "", false, &result)
+	if err == nil {
+		switch {
+		case result.Data.DeviceCode == "":
+			return DeviceAuthorization{}, invalidResponse("data.device_code")
+		case result.Data.VerificationURL == "":
+			return DeviceAuthorization{}, invalidResponse("data.verification_url")
+		}
+	}
 	return result, err
 }
 
 func (c *Client) PollDeviceAuthorization(ctx context.Context, code string) (DeviceAuthorizationStatus, error) {
 	var result DeviceAuthorizationStatus
 	err := c.doJSON(ctx, http.MethodGet, "/device-authorizations/"+url.PathEscape(code), nil, false, "", false, &result)
+	if err == nil && result.Data.Status == "" {
+		return DeviceAuthorizationStatus{}, invalidResponse("data.status")
+	}
 	return result, err
 }
 
 func (c *Client) Me(ctx context.Context) (Me, error) {
 	var result Me
 	err := c.doJSON(ctx, http.MethodGet, "/me", nil, true, "", false, &result)
+	if err == nil {
+		switch {
+		case result.Data.Account.ID == "":
+			return Me{}, invalidResponse("data.account.id")
+		case result.Data.Account.Email == "":
+			return Me{}, invalidResponse("data.account.email")
+		case result.Data.Token.ID == "":
+			return Me{}, invalidResponse("data.token.id")
+		}
+	}
 	return result, err
 }
 
@@ -249,9 +274,9 @@ func (c *Client) Capabilities(ctx context.Context) (CapabilityList, error) {
 	var result CapabilityList
 	err := c.doJSON(ctx, http.MethodGet, "/capabilities", nil, true, "", false, &result)
 	if err == nil {
-		for _, capability := range result.Data {
+		for index, capability := range result.Data {
 			if capability.Name == "" {
-				return CapabilityList{}, invalidResponse()
+				return CapabilityList{}, invalidResponse(fmt.Sprintf("data[%d].name", index))
 			}
 		}
 	}
@@ -262,9 +287,9 @@ func (c *Client) ListServers(ctx context.Context) (ServerList, error) {
 	var result ServerList
 	err := c.doJSON(ctx, http.MethodGet, "/servers", nil, true, "", false, &result)
 	if err == nil {
-		for _, server := range result.Data {
-			if server.ID == "" || server.Name == "" || server.Status == "" {
-				return ServerList{}, invalidResponse()
+		for index, server := range result.Data {
+			if field := missingServerField(server); field != "" {
+				return ServerList{}, invalidResponse(fmt.Sprintf("data[%d].%s", index, field))
 			}
 		}
 	}
@@ -274,8 +299,10 @@ func (c *Client) ListServers(ctx context.Context) (ServerList, error) {
 func (c *Client) ShowServer(ctx context.Context, serverID string) (ServerEnvelope, error) {
 	var result ServerEnvelope
 	err := c.doJSON(ctx, http.MethodGet, "/servers/"+url.PathEscape(serverID), nil, true, "", false, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Name == "" || result.Data.Status == "") {
-		return ServerEnvelope{}, invalidResponse()
+	if err == nil {
+		if field := missingServerField(result.Data); field != "" {
+			return ServerEnvelope{}, invalidResponse("data." + field)
+		}
 	}
 	return result, err
 }
@@ -289,8 +316,10 @@ func (c *Client) ListDaemons(ctx context.Context) (DaemonList, error) {
 func (c *Client) ShowDaemon(ctx context.Context, daemonID string) (DaemonEnvelope, error) {
 	var result DaemonEnvelope
 	err := c.doJSON(ctx, http.MethodGet, "/daemons/"+url.PathEscape(daemonID), nil, true, "", false, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Name == "" || result.Data.Status == "") {
-		return DaemonEnvelope{}, invalidResponse()
+	if err == nil {
+		if field := missingDaemonField(result.Data); field != "" {
+			return DaemonEnvelope{}, invalidResponse("data." + field)
+		}
 	}
 	return result, err
 }
@@ -301,8 +330,10 @@ func (c *Client) LifecycleDaemon(ctx context.Context, daemonID, action, idempote
 	}
 	var result OperationEnvelope
 	err := c.doJSON(ctx, http.MethodPost, "/daemons/"+url.PathEscape(daemonID)+"/"+action, nil, true, idempotencyKey, true, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Type == "" || result.Data.Status == "") {
-		return OperationEnvelope{}, invalidMutationResponse()
+	if err == nil {
+		if field := missingOperationField(result.Data); field != "" {
+			return OperationEnvelope{}, invalidMutationResponse("data." + field)
+		}
 	}
 	return result, err
 }
@@ -323,8 +354,13 @@ func (c *Client) SpawnDaemon(ctx context.Context, spawn SpawnRequest, idempotenc
 	}
 	var result DaemonSpawnEnvelope
 	err := c.doJSON(ctx, http.MethodPost, "/daemons", body, true, idempotencyKey, true, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Name == "" || result.Meta.Operation.ID == "" || result.Meta.Operation.Status == "") {
-		return DaemonSpawnEnvelope{}, invalidMutationResponse()
+	if err == nil {
+		if field := missingDaemonField(result.Data); field != "" {
+			return DaemonSpawnEnvelope{}, invalidMutationResponse("data." + field)
+		}
+		if field := missingOperationField(result.Meta.Operation); field != "" {
+			return DaemonSpawnEnvelope{}, invalidMutationResponse("meta.operation." + field)
+		}
 	}
 	return result, err
 }
@@ -342,8 +378,10 @@ func (c *Client) DestroyDaemon(ctx context.Context, daemonID, etag, idempotencyK
 	}
 	var result OperationEnvelope
 	err := c.doJSONWithHeaders(ctx, http.MethodDelete, "/daemons/"+url.PathEscape(daemonID), nil, true, idempotencyKey, true, headers, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Type == "" || result.Data.Status == "") {
-		return OperationEnvelope{}, invalidMutationResponse()
+	if err == nil {
+		if field := missingOperationField(result.Data); field != "" {
+			return OperationEnvelope{}, invalidMutationResponse("data." + field)
+		}
 	}
 	return result, err
 }
@@ -356,9 +394,9 @@ func (c *Client) ListOperations(ctx context.Context, limit int) (OperationList, 
 	var result OperationList
 	err := c.doJSON(ctx, http.MethodGet, requestPath, nil, true, "", false, &result)
 	if err == nil {
-		for _, operation := range result.Data {
-			if operation.ID == "" || operation.Type == "" || operation.Status == "" {
-				return OperationList{}, invalidResponse()
+		for index, operation := range result.Data {
+			if field := missingOperationField(operation); field != "" {
+				return OperationList{}, invalidResponse(fmt.Sprintf("data[%d].%s", index, field))
 			}
 		}
 	}
@@ -383,8 +421,10 @@ func (c *Client) ResolveServer(ctx context.Context, value string) (Server, error
 func (c *Client) ShowOperation(ctx context.Context, operationID string) (OperationEnvelope, error) {
 	var result OperationEnvelope
 	err := c.doJSON(ctx, http.MethodGet, "/operations/"+url.PathEscape(operationID), nil, true, "", false, &result)
-	if err == nil && (result.Data.ID == "" || result.Data.Type == "" || result.Data.Status == "") {
-		return OperationEnvelope{}, invalidResponse()
+	if err == nil {
+		if field := missingOperationField(result.Data); field != "" {
+			return OperationEnvelope{}, invalidResponse("data." + field)
+		}
 	}
 	return result, err
 }
@@ -414,6 +454,16 @@ func (c *Client) MintTicket(ctx context.Context, daemonID, session string, cols,
 		"rows":        rows,
 		"attach_mode": "create_or_attach",
 	}, true, legacyIdempotencyKey(), true, &result)
+	if err == nil {
+		switch {
+		case result.Data.GatewayURL == "":
+			return Ticket{}, invalidMutationResponse("data.gateway_url")
+		case result.Data.Ticket == "":
+			return Ticket{}, invalidMutationResponse("data.ticket")
+		case result.Data.Protocol == 0:
+			return Ticket{}, invalidMutationResponse("data.terminal_protocol")
+		}
+	}
 	return result, err
 }
 
@@ -424,12 +474,55 @@ func (c *Client) Upload(ctx context.Context, daemonID, filename string, file *os
 	return c.upload(ctx, daemonID, filename, file)
 }
 
-func invalidResponse() error {
-	return errs.New("invalid_response", "The Control Plane API returned an invalid resource document.", 1)
+func invalidResponse(field string) error {
+	return errs.New("invalid_response", unexpectedShapeMessage(field), 1)
 }
 
-func invalidMutationResponse() error {
-	return errs.New("outcome_unknown", "The Control Plane accepted the mutation but returned an invalid operation document. Reconcile the resource before retrying with the same idempotency key.", 8)
+func invalidMutationResponse(field string) error {
+	return errs.New("outcome_unknown", "The mutation may have been accepted, but the Control Plane API response shape was unexpected at field "+field+". Reconcile the resource before retrying with the same idempotency key.", 8)
+}
+
+func unexpectedShapeMessage(field string) string {
+	return "The Control Plane API response shape was unexpected at field " + field + "."
+}
+
+func missingServerField(server Server) string {
+	switch {
+	case server.ID == "":
+		return "id"
+	case server.Name == "":
+		return "name"
+	case server.Status == "":
+		return "status"
+	default:
+		return ""
+	}
+}
+
+func missingDaemonField(daemon Daemon) string {
+	switch {
+	case daemon.ID == "":
+		return "id"
+	case daemon.Name == "":
+		return "name"
+	case daemon.Status == "":
+		return "status"
+	default:
+		return ""
+	}
+}
+
+func missingOperationField(operation Operation) string {
+	switch {
+	case operation.ID == "":
+		return "id"
+	case operation.Type == "":
+		return "type"
+	case operation.Status == "":
+		return "status"
+	default:
+		return ""
+	}
 }
 
 func IsAPIError(err error, code string) bool {
