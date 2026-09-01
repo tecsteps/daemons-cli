@@ -7,12 +7,19 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
 type rawEnvelope interface {
 	setRaw(json.RawMessage)
+}
+
+// headerReceiver lets a typed envelope keep response headers that matter for
+// later conditional requests or polling, such as ETag and Retry-After.
+type headerReceiver interface {
+	setResponseHeaders(http.Header)
 }
 
 type Account struct {
@@ -66,9 +73,33 @@ type DaemonEnvelope struct {
 	Data Daemon          `json:"data"`
 	Meta map[string]any  `json:"meta"`
 	Raw  json.RawMessage `json:"-"`
+	ETag string          `json:"-"`
 }
 
 func (response *DaemonEnvelope) setRaw(raw json.RawMessage) { response.Raw = raw }
+
+func (response *DaemonEnvelope) setResponseHeaders(headers http.Header) {
+	response.ETag = headers.Get("ETag")
+}
+
+// DaemonSpawnEnvelope is the 202 document returned by POST /daemons: the new
+// daemon plus the spawn Operation carried in meta.
+type DaemonSpawnEnvelope struct {
+	Data Daemon `json:"data"`
+	Meta struct {
+		Operation Operation `json:"operation"`
+	} `json:"meta"`
+	Raw json.RawMessage `json:"-"`
+}
+
+func (response *DaemonSpawnEnvelope) setRaw(raw json.RawMessage) { response.Raw = raw }
+
+type SpawnRequest struct {
+	ServerID     string
+	Name         string
+	PrimaryAgent string
+	DiskQuotaGB  int
+}
 
 type Server struct {
 	ID       string `json:"id"`
@@ -133,12 +164,25 @@ type Operation struct {
 }
 
 type OperationEnvelope struct {
-	Data Operation       `json:"data"`
+	Data       Operation       `json:"data"`
+	Meta       map[string]any  `json:"meta"`
+	Raw        json.RawMessage `json:"-"`
+	RetryAfter string          `json:"-"`
+}
+
+func (response *OperationEnvelope) setRaw(raw json.RawMessage) { response.Raw = raw }
+
+func (response *OperationEnvelope) setResponseHeaders(headers http.Header) {
+	response.RetryAfter = headers.Get("Retry-After")
+}
+
+type OperationList struct {
+	Data []Operation     `json:"data"`
 	Meta map[string]any  `json:"meta"`
 	Raw  json.RawMessage `json:"-"`
 }
 
-func (response *OperationEnvelope) setRaw(raw json.RawMessage) { response.Raw = raw }
+func (response *OperationList) setRaw(raw json.RawMessage) { response.Raw = raw }
 
 type DeviceAuthorization struct {
 	Data struct {
@@ -261,6 +305,79 @@ func (c *Client) LifecycleDaemon(ctx context.Context, daemonID, action, idempote
 		return OperationEnvelope{}, invalidMutationResponse()
 	}
 	return result, err
+}
+
+func (c *Client) SpawnDaemon(ctx context.Context, spawn SpawnRequest, idempotencyKey string) (DaemonSpawnEnvelope, error) {
+	if err := c.Preflight(ctx); err != nil {
+		return DaemonSpawnEnvelope{}, err
+	}
+	body := map[string]any{
+		"server_id": spawn.ServerID,
+		"name":      spawn.Name,
+	}
+	if spawn.PrimaryAgent != "" {
+		body["primary_agent"] = spawn.PrimaryAgent
+	}
+	if spawn.DiskQuotaGB > 0 {
+		body["disk_quota_gb"] = spawn.DiskQuotaGB
+	}
+	var result DaemonSpawnEnvelope
+	err := c.doJSON(ctx, http.MethodPost, "/daemons", body, true, idempotencyKey, true, &result)
+	if err == nil && (result.Data.ID == "" || result.Data.Name == "" || result.Meta.Operation.ID == "" || result.Meta.Operation.Status == "") {
+		return DaemonSpawnEnvelope{}, invalidMutationResponse()
+	}
+	return result, err
+}
+
+// DestroyDaemon sends the conditional delete. The caller supplies the ETag
+// captured from ShowDaemon; an empty ETag sends no If-Match and lets the
+// server reject the unconditional request.
+func (c *Client) DestroyDaemon(ctx context.Context, daemonID, etag, idempotencyKey string) (OperationEnvelope, error) {
+	if err := c.Preflight(ctx); err != nil {
+		return OperationEnvelope{}, err
+	}
+	headers := http.Header{}
+	if etag != "" {
+		headers.Set("If-Match", etag)
+	}
+	var result OperationEnvelope
+	err := c.doJSONWithHeaders(ctx, http.MethodDelete, "/daemons/"+url.PathEscape(daemonID), nil, true, idempotencyKey, true, headers, &result)
+	if err == nil && (result.Data.ID == "" || result.Data.Type == "" || result.Data.Status == "") {
+		return OperationEnvelope{}, invalidMutationResponse()
+	}
+	return result, err
+}
+
+func (c *Client) ListOperations(ctx context.Context, limit int) (OperationList, error) {
+	requestPath := "/operations"
+	if limit > 0 {
+		requestPath += "?limit=" + strconv.Itoa(limit)
+	}
+	var result OperationList
+	err := c.doJSON(ctx, http.MethodGet, requestPath, nil, true, "", false, &result)
+	if err == nil {
+		for _, operation := range result.Data {
+			if operation.ID == "" || operation.Type == "" || operation.Status == "" {
+				return OperationList{}, invalidResponse()
+			}
+		}
+	}
+	return result, err
+}
+
+// ResolveServer accepts a server UUID or exact name. Names are matched
+// exactly against the account's server list; there is no prefix matching.
+func (c *Client) ResolveServer(ctx context.Context, value string) (Server, error) {
+	servers, err := c.ListServers(ctx)
+	if err != nil {
+		return Server{}, err
+	}
+	for _, server := range servers.Data {
+		if server.ID == value || server.Name == value {
+			return server, nil
+		}
+	}
+	return Server{}, &errs.APIError{Status: 404, Code: "not_found", Detail: "The server was not found."}
 }
 
 func (c *Client) ShowOperation(ctx context.Context, operationID string) (OperationEnvelope, error) {

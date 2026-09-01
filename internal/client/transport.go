@@ -58,6 +58,22 @@ func (c *Client) doJSON(
 	requireVersion bool,
 	result any,
 ) error {
+	return c.doJSONWithHeaders(ctx, method, requestPath, body, authenticated, idempotencyKey, requireVersion, nil, result)
+}
+
+// doJSONWithHeaders is doJSON with extra request headers such as If-Match.
+// It never creates an idempotency key; the caller owns that decision.
+func (c *Client) doJSONWithHeaders(
+	ctx context.Context,
+	method string,
+	requestPath string,
+	body any,
+	authenticated bool,
+	idempotencyKey string,
+	requireVersion bool,
+	headers http.Header,
+	result any,
+) error {
 	var requestBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -76,6 +92,11 @@ func (c *Client) doJSON(
 	}
 	if idempotencyKey != "" {
 		request.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			request.Header.Add(name, value)
+		}
 	}
 
 	response, err := c.http.Do(request)
@@ -113,6 +134,9 @@ func (c *Client) doJSON(
 	if envelope, ok := result.(rawEnvelope); ok {
 		envelope.setRaw(append(json.RawMessage(nil), raw...))
 	}
+	if receiver, ok := result.(headerReceiver); ok {
+		receiver.setResponseHeaders(response.Header)
+	}
 
 	return nil
 }
@@ -123,7 +147,9 @@ func (c *Client) newRequest(ctx context.Context, method, requestPath string, bod
 	}
 
 	endpoint := *c.baseURL
+	requestPath, query, _ := strings.Cut(requestPath, "?")
 	endpoint.Path = path.Join(c.baseURL.Path, requestPath)
+	endpoint.RawQuery = query
 	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)

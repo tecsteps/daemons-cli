@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -26,11 +29,15 @@ Commands:
   servers show ID
   list | ls | daemons list
   show ID | daemons show ID
-  start|stop|restart ID
+  spawn NAME --server SERVER [--agent AGENT] [--disk-quota-gb N]
+  start|stop|restart|retry ID
+  destroy ID [--etag ETAG]
+  operations list [--limit N]
   operations show ID
   attach DAEMON [--session NAME]
   upload DAEMON PATH...
 
+Mutation options: --idempotency-key KEY --wait --wait-timeout 10m
 Global options: --json --quiet --host URL --no-color --request-id ID --version`
 
 type Dependencies struct {
@@ -46,6 +53,9 @@ type Dependencies struct {
 	Version           string
 	IsInteractive     func() bool
 	NewIdempotencyKey func() (string, error)
+	// OpenURL opens an approval URL in the user's browser. It is only called
+	// interactively after the user answers yes, and only for a safe URL.
+	OpenURL func(string) error
 }
 
 type runResult struct {
@@ -129,6 +139,9 @@ func defaults(dependencies Dependencies) Dependencies {
 			return dependencies.Stdin != nil && term.IsTerminal(int(dependencies.Stdin.Fd()))
 		}
 	}
+	if dependencies.OpenURL == nil {
+		dependencies.OpenURL = openBrowser
+	}
 	if dependencies.NewIdempotencyKey == nil {
 		dependencies.NewIdempotencyKey = func() (string, error) {
 			value := make([]byte, 16)
@@ -139,6 +152,17 @@ func defaults(dependencies Dependencies) Dependencies {
 		}
 	}
 	return dependencies
+}
+
+func openBrowser(target string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", target).Run()
+	case "linux":
+		return exec.Command("xdg-open", target).Run()
+	default:
+		return errors.New("no browser opener for this platform")
+	}
 }
 
 func environmentMap(values []string) map[string]string {

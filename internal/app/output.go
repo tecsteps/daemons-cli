@@ -3,9 +3,11 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/tecsteps/daemons-cli/internal/errs"
@@ -38,6 +40,26 @@ func writeError(dependencies Dependencies, jsonOutput bool, err error) {
 		return
 	}
 	fmt.Fprintf(dependencies.ErrorOutput, "Error [%s]: %s\n", errs.Code(err), sanitizeText(err.Error()))
+	var apiError *errs.APIError
+	if errors.As(err, &apiError) {
+		for _, field := range sortedFieldNames(apiError.Errors) {
+			if sensitiveField(field) {
+				continue
+			}
+			for _, message := range apiError.Errors[field] {
+				fmt.Fprintf(dependencies.ErrorOutput, "  %s: %s\n", field, sanitizeText(message))
+			}
+		}
+	}
+}
+
+func sortedFieldNames(fields map[string][]string) []string {
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func sanitizeProblem(raw json.RawMessage) json.RawMessage {

@@ -3,8 +3,11 @@ package app
 import (
 	"fmt"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/tecsteps/daemons-cli/internal/errs"
+	"github.com/tecsteps/daemons-cli/internal/operation"
 )
 
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{8,128}$`)
@@ -54,39 +57,93 @@ func extractGlobalOptions(arguments []string) ([]string, globalOptions, error) {
 	return command, options, nil
 }
 
-func lifecycleArguments(arguments []string, usage string, options globalOptions, dependencies Dependencies) (string, string, error) {
-	identifier := ""
-	idempotencyKey := ""
+// mutationFlags is the parsed argument set shared by every state-changing
+// command: positionals, the idempotency key, and the optional --wait pair.
+type mutationFlags struct {
+	Positionals    []string
+	Values         map[string]string
+	IdempotencyKey string
+	Wait           bool
+	WaitTimeout    time.Duration
+}
+
+// parseMutationFlags parses arguments for a mutation. valueFlags names the
+// command-specific flags that take a value (for example --server). The
+// idempotency key follows the Phase 1 contract: explicit, or generated once
+// and announced on stderr in interactive use, or refused (exit 2) otherwise.
+func parseMutationFlags(arguments []string, valueFlags []string, usage string, _ globalOptions, _ Dependencies) (mutationFlags, error) {
+	flags := mutationFlags{Values: map[string]string{}, WaitTimeout: operation.DefaultTimeout}
+	waitTimeout := ""
 	for index := 0; index < len(arguments); index++ {
-		if arguments[index] == "--idempotency-key" {
-			if index+1 >= len(arguments) {
-				return "", "", errs.New("usage_error", "--idempotency-key requires a value.", 2)
-			}
-			idempotencyKey = arguments[index+1]
-			index++
+		argument := arguments[index]
+		if !strings.HasPrefix(argument, "--") {
+			flags.Positionals = append(flags.Positionals, argument)
 			continue
 		}
-		if identifier != "" {
-			return "", "", errs.New("usage_error", usage, 2)
+		if argument == "--wait" {
+			flags.Wait = true
+			continue
 		}
-		identifier = arguments[index]
+		takesValue := argument == "--idempotency-key" || argument == "--wait-timeout"
+		for _, name := range valueFlags {
+			if argument == name {
+				takesValue = true
+			}
+		}
+		if !takesValue {
+			return flags, errs.New("usage_error", usage, 2)
+		}
+		if index+1 >= len(arguments) {
+			return flags, errs.New("usage_error", argument+" requires a value.", 2)
+		}
+		value := arguments[index+1]
+		index++
+		switch argument {
+		case "--idempotency-key":
+			flags.IdempotencyKey = value
+		case "--wait-timeout":
+			waitTimeout = value
+		default:
+			flags.Values[argument] = value
+		}
 	}
-	if identifier == "" {
-		return "", "", errs.New("usage_error", usage, 2)
+	if waitTimeout != "" {
+		parsed, err := time.ParseDuration(waitTimeout)
+		if err != nil || parsed <= 0 {
+			return flags, errs.New("usage_error", "--wait-timeout must be a positive duration such as 90s or 10m.", 2)
+		}
+		flags.WaitTimeout = parsed
 	}
-	if idempotencyKey == "" {
+	return flags, nil
+}
+
+// ensureIdempotencyKey applies the Phase 1 key contract after local argument
+// validation, so a usage mistake is reported before a missing key is.
+func ensureIdempotencyKey(flags *mutationFlags, options globalOptions, dependencies Dependencies) error {
+	if flags.IdempotencyKey == "" {
 		if options.JSON || !dependencies.IsInteractive() {
-			return "", "", errs.New("idempotency_key_required", "Non-interactive mutations require --idempotency-key.", 2)
+			return errs.New("idempotency_key_required", "Non-interactive mutations require --idempotency-key.", 2)
 		}
 		var err error
-		idempotencyKey, err = dependencies.NewIdempotencyKey()
+		flags.IdempotencyKey, err = dependencies.NewIdempotencyKey()
 		if err != nil {
-			return "", "", errs.New("idempotency_key_unavailable", "Could not generate an idempotency key.", 1)
+			return errs.New("idempotency_key_unavailable", "Could not generate an idempotency key.", 1)
 		}
-		fmt.Fprintf(dependencies.ErrorOutput, "Idempotency-Key: %s\n", idempotencyKey)
+		fmt.Fprintf(dependencies.ErrorOutput, "Idempotency-Key: %s\n", flags.IdempotencyKey)
 	}
-	if !idempotencyKeyPattern.MatchString(idempotencyKey) {
-		return "", "", errs.New("invalid_idempotency_key", "Idempotency keys must be 8-128 characters using letters, numbers, dot, underscore, colon, or hyphen.", 2)
+	if !idempotencyKeyPattern.MatchString(flags.IdempotencyKey) {
+		return errs.New("invalid_idempotency_key", "Idempotency keys must be 8-128 characters using letters, numbers, dot, underscore, colon, or hyphen.", 2)
 	}
-	return identifier, idempotencyKey, nil
+	return nil
+}
+
+func lifecycleArguments(arguments []string, usage string, options globalOptions, dependencies Dependencies) (mutationFlags, error) {
+	flags, err := parseMutationFlags(arguments, []string{"--etag"}, usage, options, dependencies)
+	if err != nil {
+		return flags, err
+	}
+	if len(flags.Positionals) != 1 || flags.Positionals[0] == "" {
+		return flags, errs.New("usage_error", usage, 2)
+	}
+	return flags, ensureIdempotencyKey(&flags, options, dependencies)
 }
