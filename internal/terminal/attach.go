@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/coder/websocket"
 	"github.com/tecsteps/daemons-cli/internal/client"
@@ -17,6 +18,12 @@ import (
 )
 
 const prefixByte byte = 0x1d
+
+// requiredFeatures are the server-advertised terminal features this client
+// depends on. takeover_v1 backs create_or_attach: without it the gateway
+// cannot promise the 4409 "replaced" semantics the CLI reports, so attach
+// refuses rather than guessing.
+var requiredFeatures = []string{"takeover_v1"}
 
 type Size struct {
 	Cols int
@@ -86,6 +93,9 @@ func connectSocket(ctx context.Context, api *client.Client, daemonID, session st
 		err := errs.New("terminal_protocol_mismatch", "The gateway terminal protocol is not compatible with this CLI.", 2)
 		return nil, Outcome{ExitCode: 2}, err
 	}
+	if err := CheckFeatures(ticket.Data.Features); err != nil {
+		return nil, Outcome{ExitCode: 2}, err
+	}
 	if err := validateGatewayURL(ticket.Data.GatewayURL); err != nil {
 		return nil, Outcome{ExitCode: 10}, err
 	}
@@ -104,10 +114,42 @@ func connectSocket(ctx context.Context, api *client.Client, daemonID, session st
 				exitCode = 5
 			}
 		}
-		return nil, Outcome{ExitCode: exitCode}, errs.New("gateway_connection_failed", "Unable to connect to the terminal gateway.", exitCode)
+		// The dial error can quote the request, including the
+		// Sec-WebSocket-Protocol ticket; it is never surfaced verbatim.
+		return nil, Outcome{ExitCode: exitCode}, errs.New("gateway_connection_failed", "Unable to connect to the terminal gateway ("+errs.Redact(summarizeDialError(err))+").", exitCode)
 	}
 
 	return connection, Outcome{}, nil
+}
+
+// CheckFeatures verifies the ticket advertises every feature this client
+// needs. Unknown extra features are tolerated; a missing required one is a
+// definite pre-input refusal (exit 2).
+func CheckFeatures(advertised []string) error {
+	for _, required := range requiredFeatures {
+		found := false
+		for _, feature := range advertised {
+			if feature == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errs.New("terminal_feature_unavailable", "The Control Plane did not advertise the "+required+" terminal feature this CLI requires; attach refused.", 2)
+		}
+	}
+	return nil
+}
+
+func summarizeDialError(err error) string {
+	message := err.Error()
+	if index := strings.Index(message, ":"); index > 0 && index < 64 {
+		message = message[:index]
+	}
+	if len(message) > 120 {
+		message = message[:120]
+	}
+	return message
 }
 
 func Run(ctx context.Context, connection *websocket.Conn, streams Streams) Outcome {

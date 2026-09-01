@@ -307,10 +307,16 @@ func (c *Client) upload(ctx context.Context, daemonID, filename string, file *os
 			switch response.StatusCode {
 			case http.StatusInsufficientStorage:
 				apiError.Code = "daemon_storage_full"
-			case http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+			case http.StatusRequestEntityTooLarge:
 				apiError.Code = "file_too_large"
-				if messages := apiError.Errors["file"]; len(messages) > 0 {
-					apiError.Detail = messages[0]
+			case http.StatusUnprocessableEntity:
+				// Only a validation failure on the file field is a size
+				// problem; other 422 codes (unsafe_workspace_path) stand.
+				if messages := apiError.Errors["file"]; len(messages) > 0 || apiError.Code == "" {
+					apiError.Code = "file_too_large"
+					if len(messages) > 0 {
+						apiError.Detail = messages[0]
+					}
 				}
 			default:
 				if apiError.Code == "" {

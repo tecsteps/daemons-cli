@@ -63,6 +63,6 @@ func emptyUploadReport(requested int, err error) upload.Report {
 	for index := range report.Data.Results {
 		report.Data.Results[index] = upload.Result{Index: index, Status: "not_attempted"}
 	}
-	report.Error = &upload.Problem{Code: errs.Code(err), Message: err.Error(), FailedIndex: 0}
+	report.Error = &upload.Problem{Code: errs.Code(err), Message: sanitizeText(err.Error()), FailedIndex: 0}
 	return report
 }

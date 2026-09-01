@@ -120,14 +120,14 @@ func Run(ctx context.Context, api *client.Client, daemonID string, files []OpenF
 			report.Data.Results[local.Index].Status = status
 			report.Error = &Problem{
 				Code:        errs.Code(err),
-				Message:     err.Error(),
+				Message:     errs.Redact(err.Error()),
 				FailedIndex: local.Index,
 			}
 			return report, err
 		}
 		if !response.OK || !safeUploadPath(response.Path) {
 			err := errs.New("unsafe_server_path", "The server returned an unsafe upload path.", 10)
-			report.Error = &Problem{Code: errs.Code(err), Message: err.Error(), FailedIndex: local.Index}
+			report.Error = &Problem{Code: errs.Code(err), Message: errs.Redact(err.Error()), FailedIndex: local.Index}
 			return report, err
 		}
 

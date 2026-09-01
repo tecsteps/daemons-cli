@@ -1,9 +1,12 @@
 package terminal
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/coder/websocket"
+	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
 func TestLocalPrefixDetachAndLiteralForwarding(t *testing.T) {
@@ -30,5 +33,25 @@ func TestSocketCloseExitCodes(t *testing.T) {
 		if got != want {
 			t.Fatalf("status %d exit = %d, want %d", status, got, want)
 		}
+	}
+}
+
+func TestCheckFeaturesRequiresAdvertisedTakeover(t *testing.T) {
+	if err := CheckFeatures([]string{"takeover_v1", "future_feature"}); err != nil {
+		t.Fatalf("advertised features refused: %v", err)
+	}
+	for _, advertised := range [][]string{nil, {}, {"reattach_only_v1"}} {
+		err := CheckFeatures(advertised)
+		if err == nil || errs.ExitCode(err) != 2 || errs.Code(err) != "terminal_feature_unavailable" {
+			t.Fatalf("CheckFeatures(%v) = %v", advertised, err)
+		}
+	}
+}
+
+func TestDialErrorSummaryNeverCarriesTheTicket(t *testing.T) {
+	err := errors.New("failed to WebSocket dial: Sec-WebSocket-Protocol dr.dr_ticket_secret rejected")
+	summary := errs.Redact(summarizeDialError(err))
+	if strings.Contains(summary, "secret") {
+		t.Fatalf("summary = %q", summary)
 	}
 }

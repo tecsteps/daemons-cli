@@ -62,6 +62,11 @@ func attach(ctx context.Context, arguments []string, options globalOptions, depe
 	if err != nil {
 		return err
 	}
+	// Deferred as well as called explicitly: a panic anywhere inside Connect
+	// still unwinds through this and leaves the user's terminal cooked.
+	// Restorer is idempotent, so the explicit call below is the one whose
+	// error is reported.
+	defer func() { _ = restore() }()
 	outcome, attachErr := terminal.Connect(ctx, api, daemon.ID, session, size, terminal.Streams{
 		Input:   dependencies.Input,
 		Output:  dependencies.Output,
@@ -69,7 +74,7 @@ func attach(ctx context.Context, arguments []string, options globalOptions, depe
 		Signals: signals,
 	})
 	if restoreErr := restore(); restoreErr != nil {
-		return errs.New("terminal_restore_failed", restoreErr.Error(), 1)
+		return errs.New("terminal_restore_failed", sanitizeText(restoreErr.Error()), 1)
 	}
 	if attachErr != nil {
 		return attachErr

@@ -6,14 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
-
-var credentialValuePattern = regexp.MustCompile(`(?i)(?:bearer[ \t]+)?dr_(?:cp|agent|terminal|ticket)_[A-Za-z0-9._~-]+`)
 
 func writeJSON(writer io.Writer, value any) {
 	encoder := json.NewEncoder(writer)
@@ -96,7 +93,7 @@ func sanitizeValue(value any, key string) any {
 }
 
 func sanitizeText(value string) string {
-	return credentialValuePattern.ReplaceAllString(value, "[REDACTED]")
+	return errs.Redact(value)
 }
 
 func sensitiveField(key string) bool {
