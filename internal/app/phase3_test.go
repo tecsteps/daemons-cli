@@ -76,6 +76,12 @@ func TestPhaseThreeCommandsPreserveCanonicalJSON(t *testing.T) {
 			want:      []string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?cursor=c1&limit=50&path=src%2Fapp"},
 		},
 		{
+			name:      "files list accepts the absolute path returned by upload",
+			arguments: []string{"files", "list", "11111111-2222-3333-4444-555555555555", "/root/workspace/uploads"},
+			responses: map[string]string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?path=uploads": filesPageTwo},
+			want:      []string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?path=uploads"},
+		},
+		{
 			name:      "files list --all follows the cursor and writes one document per page",
 			arguments: []string{"files", "list", "11111111-2222-3333-4444-555555555555", "--all"},
 			responses: map[string]string{

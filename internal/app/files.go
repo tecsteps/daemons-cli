@@ -61,9 +61,10 @@ func listFiles(ctx context.Context, arguments []string, options globalOptions, d
 	}
 	workspacePath := ""
 	if len(positionals) == 2 {
-		workspacePath = strings.Trim(positionals[1], "/")
-		if !safeRelativeWorkspacePath(workspacePath) {
-			return errs.New("unsafe_workspace_path", "PATH must be a plain relative workspace path without . or .. segments.", 2)
+		var pathErr error
+		workspacePath, pathErr = normalizeWorkspacePath(positionals[1])
+		if pathErr != nil {
+			return pathErr
 		}
 	}
 	if all && cursor != "" {
@@ -95,7 +96,7 @@ func listFiles(ctx context.Context, arguments []string, options globalOptions, d
 			writeCanonicalJSON(dependencies.Output, page.Raw)
 		} else {
 			for _, entry := range page.Data {
-				fmt.Fprintf(writer, "%s\t%d\t%s\t%s\n", entry.Type, entry.Size, time.Unix(entry.MTime, 0).UTC().Format(time.RFC3339), sanitizeText(entry.Name))
+				fmt.Fprintf(writer, "%s\t%d\t%s\t%s\n", entry.Type, entry.Size, time.Unix(int64(entry.MTime), 0).UTC().Format(time.RFC3339), sanitizeText(entry.Name))
 			}
 		}
 		next := ""
@@ -119,6 +120,26 @@ func listFiles(ctx context.Context, arguments []string, options globalOptions, d
 		cursor = next
 	}
 	return writer.Flush()
+}
+
+// normalizeWorkspacePath accepts the relative API form and the absolute path
+// returned by upload. Other absolute paths remain local validation errors.
+func normalizeWorkspacePath(value string) (string, error) {
+	const workspaceRoot = "/root/workspace"
+	switch {
+	case value == workspaceRoot || value == workspaceRoot+"/":
+		value = ""
+	case strings.HasPrefix(value, workspaceRoot+"/"):
+		value = strings.TrimSuffix(strings.TrimPrefix(value, workspaceRoot+"/"), "/")
+	case strings.HasPrefix(value, "/"):
+		return "", errs.New("unsafe_workspace_path", "Absolute PATH must be /root/workspace or a path below it.", 2)
+	default:
+		value = strings.TrimSuffix(value, "/")
+	}
+	if !safeRelativeWorkspacePath(value) {
+		return "", errs.New("unsafe_workspace_path", "PATH must be a plain relative workspace path without . or .. segments.", 2)
+	}
+	return value, nil
 }
 
 // safeRelativeWorkspacePath mirrors the server's rule so an obviously bad

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,14 +30,14 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 			json.NewDecoder(request.Body).Decode(&body)
 			requestedScopes <- body.Scopes
 			writer.WriteHeader(http.StatusCreated)
-			io.WriteString(writer, `{"data":{"device_code":"DEVICE-CODE","verification_url":"https://example.test/approve","expires_at":"2030-01-01T00:00:00Z","interval_seconds":5},"meta":{}}`)
+			io.WriteString(writer, `{"data":{"device_code":"DEVICE-CODE","verification_url":"https://example.test/approve","expires_at":"2030-01-01T00:00:00Z","interval_seconds":5},"meta":[]}`)
 		case "/api/v1/device-authorizations/DEVICE-CODE":
-			io.WriteString(writer, `{"data":{"status":"approved","access_token":"dr_cp_login_token","token_type":"Bearer"},"meta":{}}`)
+			io.WriteString(writer, `{"data":{"status":"approved","access_token":"dr_cp_login_token","token_type":"Bearer"},"meta":[]}`)
 		case "/api/v1/me":
 			if request.Header.Get("Authorization") != "Bearer dr_cp_login_token" {
 				t.Errorf("me authorization = %q", request.Header.Get("Authorization"))
 			}
-			io.WriteString(writer, `{"data":{"account":{"id":"user-uuid","email":"developer@example.test","control_plane_api_enabled":true},"token":{"id":"token-uuid","name":"CLI","scopes":[],"expires_at":"2030-01-01T00:00:00Z"}},"meta":{}}`)
+			io.WriteString(writer, `{"data":{"account":{"id":"user-uuid","email":"developer@example.test","control_plane_api_enabled":true},"token":{"id":"token-uuid","name":"CLI","scopes":[],"restrictions":[],"expires_at":"2030-01-01T00:00:00Z"}},"meta":[]}`)
 		case "/api/v1/daemons":
 			io.WriteString(writer, `{"data":[{"id":"daemon-uuid","name":"research","status":"running","primary_agent":"codex","server":{"id":"server-uuid","name":"host","status":"running"}}],"meta":{}}`)
 		case "/api/v1/tokens/current":
@@ -58,6 +59,7 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 
 	var output bytes.Buffer
 	var errorOutput bytes.Buffer
+	opened := []string{}
 	dependencies := Dependencies{
 		Output:      &output,
 		ErrorOutput: &errorOutput,
@@ -65,6 +67,13 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 		HTTPClient:  server.Client(),
 		Now:         now,
 		Sleep:       noWait,
+		IsInteractive: func() bool {
+			return true
+		},
+		OpenURL: func(target string) error {
+			opened = append(opened, target)
+			return nil
+		},
 	}
 	baseArguments := []string{"--base-url", server.URL, "--credentials-file", credentialPath}
 	if code := Run(context.Background(), append(baseArguments, "login"), dependencies); code != 0 {
@@ -80,8 +89,11 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 	if credential.Token != "dr_cp_login_token" || credential.AccountEmail != "developer@example.test" {
 		t.Fatalf("credential = %#v", credential)
 	}
-	if scopes := <-requestedScopes; len(scopes) != 7 {
+	if scopes := <-requestedScopes; !slices.Equal(scopes, defaultScopes) || len(scopes) != 13 {
 		t.Fatalf("default scopes = %#v", scopes)
+	}
+	if !slices.Equal(opened, []string{"https://example.test/approve"}) || !strings.Contains(output.String(), "https://example.test/approve") {
+		t.Fatalf("opened = %#v, stdout = %q", opened, output.String())
 	}
 
 	output.Reset()

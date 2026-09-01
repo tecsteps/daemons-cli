@@ -19,9 +19,15 @@ var defaultScopes = []string{
 	"servers:read",
 	"daemons:read",
 	"daemons:write",
+	"daemons:destroy",
 	"operations:read",
+	"files:read",
 	"files:write",
 	"terminal:connect",
+	"tasks:read",
+	"tasks:write",
+	"tasks:cancel",
+	"logs:read",
 }
 
 const loginUsage = "Usage: daemons login [--scope SCOPE] [--lifetime 7d] | daemons login --token-stdin"
@@ -76,9 +82,14 @@ func login(ctx context.Context, arguments []string, options globalOptions, depen
 		return errs.New("invalid_device_authorization", "The Control Plane returned an invalid device authorization.", 1)
 	}
 	if options.JSON {
-		writeJSON(dependencies.Output, authorization)
+		writeCanonicalJSON(dependencies.Output, authorization.Raw)
 	} else {
 		fmt.Fprintf(dependencies.Output, "Open %s\nEnter device code: %s\nWaiting for approval...\n", authorization.Data.VerificationURL, authorization.Data.DeviceCode)
+	}
+	if dependencies.IsInteractive() && dependencies.OpenURL != nil && safeBrowserURL(authorization.Data.VerificationURL) {
+		if openErr := dependencies.OpenURL(authorization.Data.VerificationURL); openErr != nil {
+			fmt.Fprintf(dependencies.ErrorOutput, "Could not open a browser; open %s manually.\n", authorization.Data.VerificationURL)
+		}
 	}
 
 	interval := time.Duration(authorization.Data.IntervalSeconds) * time.Second

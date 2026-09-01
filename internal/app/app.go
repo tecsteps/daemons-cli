@@ -43,7 +43,7 @@ Commands:
   files list DAEMON [PATH] [--cursor CURSOR] [--limit N] [--all]
   logs DAEMON --source agent|app|daemon|provisioning [--level LEVEL] [--cursor CURSOR] [--limit N]
 
-Mutation options: --idempotency-key KEY --wait --wait-timeout 10m
+Mutation options: --idempotency-key KEY --wait --wait-timeout DURATION (examples: 1s, 10m; bare numbers mean seconds)
 Global options: --json --quiet --host URL --no-color --request-id ID --version`
 
 type Dependencies struct {
@@ -59,8 +59,8 @@ type Dependencies struct {
 	Version           string
 	IsInteractive     func() bool
 	NewIdempotencyKey func() (string, error)
-	// OpenURL opens an approval URL in the user's browser. It is only called
-	// interactively after the user answers yes, and only for a safe URL.
+	// OpenURL opens a safe verification or approval URL in the user's browser.
+	// Device login opens directly; confirmation flows first ask the user.
 	OpenURL func(string) error
 }
 
