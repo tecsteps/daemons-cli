@@ -1,0 +1,23 @@
+{
+  "name": "daemonsrun",
+  "version": "9.9.9",
+  "description": "The daemons command-line client",
+  "license": "MIT",
+  "repository": "tecsteps/daemons-cli",
+  "bin": {
+    "daemons": "bin/daemons.js",
+    "daemonsrun": "bin/daemons.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "optionalDependencies": {
+    "daemonsrun-darwin-arm64": "9.9.9",
+    "daemonsrun-darwin-x64": "9.9.9",
+    "daemonsrun-linux-arm64": "9.9.9",
+    "daemonsrun-linux-x64": "9.9.9"
+  },
+  "scripts": {
+    "test": "node --test test/**/*.test.js"
+  }
+}

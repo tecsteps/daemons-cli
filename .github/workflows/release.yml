@@ -28,6 +28,11 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
       - name: Validate the release tag
         shell: bash
         run: |
@@ -42,6 +47,9 @@ jobs:
 
       - name: Run vet
         run: go vet ./...
+
+      - name: Run npm launcher tests
+        run: npm --prefix npm test
 
   release:
     name: Build, attest, and publish
@@ -60,6 +68,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
 
       - name: Run macOS smoke tests
         run: go test ./...
@@ -157,7 +170,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.ref_name }}
         run: |
-          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "daemons $VERSION" --generate-notes
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; continuing."
+          else
+            gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "daemons $VERSION" --generate-notes
+          fi
 
       - name: Upload and verify every release asset
         env:
@@ -172,12 +189,47 @@ jobs:
             "dist/daemons_${VERSION}_linux_arm64.tar.gz"
             'dist/SHA256SUMS'
           )
-          gh release upload "$VERSION" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$VERSION" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           uploaded="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
           for asset in "${assets[@]}"; do
             name="$(basename "$asset")"
             grep -Fx "$name" <<< "$uploaded" >/dev/null
           done
+
+      - name: Assemble npm packages from verified release archives
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          npm_version="${VERSION#v}"
+          node npm/build-packages.mjs "$npm_version"
+          npm --prefix npm test
+
+      - name: Publish npm packages
+        env:
+          NPM_TOKEN: ${{ secrets.NPMJS_ACCESS_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo 'The NPMJS_ACCESS_TOKEN repository secret is required to publish daemonsrun.' >&2
+            exit 1
+          fi
+          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/.npmrc"
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc"
+          npm_version="${VERSION#v}"
+          for package in npm/platforms/*; do
+            package_name="$(node -p "require('./' + process.argv[1]).name" "$package/package.json")"
+            if npm view "$package_name@$npm_version" version >/dev/null 2>&1; then
+              echo "$package_name@$npm_version already exists on npm; skipping."
+            else
+              npm publish "$package" --provenance --access public
+            fi
+          done
+          if npm view "daemonsrun@$npm_version" version >/dev/null 2>&1; then
+            echo "daemonsrun@$npm_version already exists on npm; skipping."
+          else
+            npm publish npm --provenance --access public
+          fi
 
       - name: Publish the complete release
         env:
