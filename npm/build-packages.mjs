@@ -60,6 +60,7 @@ for (const platform of platforms) {
             version,
             description: `daemons CLI binary for ${platform.os} ${platform.cpu}`,
             license: 'MIT',
+            repository: mainManifest.repository,
             os: [platform.os],
             cpu: [platform.cpu],
             files: ['bin'],
