@@ -28,6 +28,9 @@ var defaultScopes = []string{
 	"tasks:write",
 	"tasks:cancel",
 	"logs:read",
+	"ssh:read",
+	"ssh:manage",
+	"ssh:connect",
 }
 
 const loginUsage = "Usage: daemons login [--scope SCOPE] [--lifetime 7d] | daemons login --token-stdin"

@@ -89,7 +89,7 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 	if credential.Token != "dr_cp_login_token" || credential.AccountEmail != "developer@example.test" {
 		t.Fatalf("credential = %#v", credential)
 	}
-	if scopes := <-requestedScopes; !slices.Equal(scopes, defaultScopes) || len(scopes) != 13 {
+	if scopes := <-requestedScopes; !slices.Equal(scopes, defaultScopes) || len(scopes) != 16 {
 		t.Fatalf("default scopes = %#v", scopes)
 	}
 	if !slices.Equal(opened, []string{"https://example.test/approve"}) || !strings.Contains(output.String(), "https://example.test/approve") {

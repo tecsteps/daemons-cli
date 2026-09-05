@@ -147,6 +147,18 @@ Credentials live in an owner-only file (`~/.config/daemons/credentials.json`, or
 
 `daemons attach DAEMON [--session NAME]` requires the ticket to advertise the `takeover_v1` terminal feature; if the Control Plane does not, attach refuses (exit 2) before connecting instead of guessing at the gateway's behaviour. Raw terminal mode is restored on every exit path, including a panic.
 
+### SSH and local IDEs
+
+Enable SSH with a locally held identity (only its adjacent `.pub` file is read):
+
+```sh
+daemons ssh enable DAEMON --identity ~/.ssh/id_ed25519 --wait
+daemons ssh-config DAEMON --identity ~/.ssh/id_ed25519
+daemons ide DAEMON --editor code
+```
+
+`ssh-config` writes private, managed OpenSSH files below `~/.ssh/daemons-run/` and adds one marked `Include` to `~/.ssh/config`; it never copies a private key or stores tickets. `daemons ssh keys list DAEMON` lists fingerprints, `ssh keys remove DAEMON FINGERPRINT` removes one key, and `ssh disable DAEMON` removes SSH access. `ide --cached` uses the saved config but every new SSH transport still mints a fresh ticket and needs a current login. The proxy sends only SSH bytes on stdout; diagnostics stay on stderr.
+
 ### Exit codes
 
 `0` success; `1` API or operation failure; `2` usage or local validation; `3` authentication; `4` not found; `5` scope or capability denied; `6` web confirmation required; `7` rate or quota; `8` outcome unknown.

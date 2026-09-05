@@ -42,6 +42,9 @@ Commands:
   task list DAEMON [--limit N]
   files list DAEMON [PATH] [--cursor CURSOR] [--limit N] [--all]
   logs DAEMON --source agent|app|daemon|provisioning [--level LEVEL] [--cursor CURSOR] [--limit N]
+  ssh enable|disable|keys ...
+  ssh-config DAEMON [--identity PATH] [--remove]
+  ide DAEMON --editor code|cursor|zed|jetbrains [--folder NAME] [--cached]
 
 Mutation options: --idempotency-key KEY --wait --wait-timeout DURATION (examples: 1s, 10m; bare numbers mean seconds)
 Global options: --json --quiet --host URL --no-color --request-id ID --version`

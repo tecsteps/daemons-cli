@@ -43,6 +43,10 @@ var commandRegistry = map[string]commandHandler{
 	"task list":       errorHandler(listTasks),
 	"files list":      errorHandler(listFiles),
 	"logs":            errorHandler(showLogs),
+	"ssh":             ssh,
+	"ssh-config":      errorHandler(sshConfig),
+	"ssh-proxy":       sshProxy,
+	"ide":             errorHandler(ide),
 }
 
 func dispatch(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) runResult {
