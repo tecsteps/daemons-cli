@@ -12,4 +12,11 @@ After ready, every SSH byte is carried in binary frames without encoding or
 inspection. On local stdin EOF the helper sends the one text control frame
 `{"type":"eof"}`. The gateway closes only its relay stdin leg, continues
 draining relay stdout as binary frames, then closes the WebSocket. No other
-text frames are valid.
+text frames are valid. A binary frame may be at most 1 MiB; the helper accepts
+that full bound so normal 64 KiB relay chunks are not mistaken for an invalid
+WebSocket message.
+
+Any non-normal gateway close after `ready` is a relay failure. This includes
+close status `1013` with reason `output_backpressure`. The helper cancels its
+stdin writer, closes local stdout immediately so the parent OpenSSH process
+observes EOF, and exits non-zero without waiting for another local stdin byte.

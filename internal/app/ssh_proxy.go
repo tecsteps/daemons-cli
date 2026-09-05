@@ -5,17 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/coder/websocket"
-	"github.com/tecsteps/daemons-cli/internal/errs"
 	"io"
 	"net/http"
 	"os"
-	"sync"
+
+	"github.com/coder/websocket"
+	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
 const sshAdmissionRefusedExit = 5
 const sshControlReady = `{"type":"ready"}`
 const sshControlEOF = `{"type":"eof"}`
+const sshMaxBinaryFrameBytes = 1024 * 1024
 
 func sshProxy(ctx context.Context, args []string, opt globalOptions, d Dependencies) runResult {
 	if helpRequested(args) {
@@ -65,6 +66,7 @@ func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies) error
 		return fmt.Errorf("connect SSH gateway: %w", e)
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
+	ws.SetReadLimit(sshMaxBinaryFrameBytes)
 	typ, data, e := ws.Read(ctx)
 	if e != nil {
 		if websocket.CloseStatus(e) == 4403 {
@@ -92,21 +94,20 @@ func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies) error
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var wg sync.WaitGroup
-	var writeErr error
-	var mu sync.Mutex
-	wg.Add(1)
+	defer func() {
+		if closer, ok := d.Input.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}()
+	writeErrors := make(chan error, 1)
 	go func() {
-		defer wg.Done()
 		buf := make([]byte, 64*1024)
 		for {
 			n, rerr := d.Input.Read(buf)
 			if n > 0 {
 				b := append([]byte(nil), buf[:n]...)
 				if e := ws.Write(ctx, websocket.MessageBinary, b); e != nil {
-					mu.Lock()
-					writeErr = e
-					mu.Unlock()
+					writeErrors <- e
 					return
 				}
 			}
@@ -118,26 +119,39 @@ func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies) error
 			}
 		}
 	}()
+	closeOutput := func() {
+		if closer, ok := d.Output.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
 	for {
 		typ, b, e := ws.Read(ctx)
 		if e != nil {
+			cancel()
+			closeOutput()
+			select {
+			case writeErr := <-writeErrors:
+				if !errors.Is(writeErr, context.Canceled) {
+					return fmt.Errorf("write SSH relay: %w", writeErr)
+				}
+			default:
+			}
+			if status := websocket.CloseStatus(e); status != websocket.StatusNormalClosure {
+				return fmt.Errorf("SSH gateway closed relay (%d): %w", status, e)
+			}
 			break
 		}
 		if typ != websocket.MessageBinary {
+			cancel()
+			closeOutput()
 			return errors.New("unexpected SSH gateway control frame after ready")
 		}
 		if _, e = d.Output.Write(b); e != nil {
 			cancel()
 			_ = ws.Close(websocket.StatusGoingAway, "stdout closed")
-			break
+			closeOutput()
+			return fmt.Errorf("write SSH relay output: %w", e)
 		}
-	}
-	wg.Wait()
-	mu.Lock()
-	e = writeErr
-	mu.Unlock()
-	if e != nil && !errors.Is(e, context.Canceled) {
-		return fmt.Errorf("write SSH relay: %w", e)
 	}
 	return nil
 }
