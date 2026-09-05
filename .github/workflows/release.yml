@@ -228,7 +228,7 @@ jobs:
           if npm view "daemonsrun@$npm_version" version >/dev/null 2>&1; then
             echo "daemonsrun@$npm_version already exists on npm; skipping."
           else
-            npm publish npm --provenance --access public
+            npm publish ./npm --provenance --access public
           fi
 
       - name: Publish the complete release
