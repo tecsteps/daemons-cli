@@ -36,6 +36,8 @@ Commands:
   operations show ID
   attach DAEMON [--session NAME]
   upload DAEMON PATH...
+  payload put DAEMON OPERATION FILE
+  payload receipt DAEMON OPERATION
   task run DAEMON (PROMPT | -) [--agent AGENT] [--model MODEL] [--permission-mode MODE]
   task show DAEMON TASK
   task cancel DAEMON TASK
