@@ -1,6 +1,11 @@
 package app
 
 import (
+	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,5 +64,61 @@ func TestAtomicPrivateRefusesSymlink(t *testing.T) {
 	b, _ := os.ReadFile(target)
 	if string(b) != "keep" {
 		t.Fatalf("target changed: %q", b)
+	}
+}
+
+func TestSSHConfigWritesDNSOnlyHostKeepaliveAndProxyCommand(t *testing.T) {
+	daemon := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Daemons-Api-Version", "v1")
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/daemons/"+daemon+"/ssh" {
+			http.NotFound(w, r)
+			return
+		}
+		io.WriteString(w, `{"data":{"enabled":true,"reconciled":true,"host_key":"ssh-ed25519 AAAA","host_key_fingerprint":"SHA256:x","keys":[]},"meta":{}}`)
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	identity := filepath.Join(home, "id_ed25519")
+	if err := os.WriteFile(identity, []byte("unused"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	code := Run(context.Background(), []string{"--host", server.URL, "ssh-config", daemon, "--identity", identity}, Dependencies{
+		Output:      &output,
+		ErrorOutput: &errorOutput,
+		Environment: map[string]string{"HOME": home, "DAEMONS_TOKEN": "dr_cp_ssh"},
+		HTTPClient:  server.Client(),
+	})
+	if code != 0 {
+		t.Fatalf("exit %d stdout %q stderr %q", code, output.String(), errorOutput.String())
+	}
+	matches, err := filepath.Glob(filepath.Join(home, ".ssh", "daemons-run", "*", "config"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("managed config %v %v", matches, err)
+	}
+	body, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(body)
+	for _, want := range []string{
+		"HostName ssh.daemons.run",
+		"Port 2222",
+		"ProxyCommand",
+		"ssh-proxy " + daemon,
+		"ServerAliveInterval 30",
+		"ServerAliveCountMax 3",
+		"HostKeyAlias dr-" + daemon,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("missing %q in %q", want, config)
+		}
+	}
+	if strings.Contains(config, "HostName ignored") {
+		t.Fatal("still writing ignored hostname")
 	}
 }

@@ -152,11 +152,19 @@ func (c *Client) AccessContent(ctx context.Context, daemonID, operationID, actio
 }
 
 // ValidateGatewayURL binds a ticket destination to the configured control-plane
-// authority. Tickets remain opaque and are never placed in a URL.
+// authority. Tickets remain opaque and are never placed in a URL. SSH tickets
+// may use the DNS-only host ssh.daemons.run:2222; content relay stays on the
+// API host.
 func (c *Client) ValidateGatewayURL(value string) error {
 	u, err := url.Parse(value)
 	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" {
 		return unsafeGateway()
+	}
+	if !strings.HasPrefix(u.Path, "/") || strings.Contains(u.Path, "\\") {
+		return unsafeGateway()
+	}
+	if u.Scheme == "wss" && strings.EqualFold(u.Host, sshGatewayAuthority()) && u.Path == sshGatewayPath {
+		return nil
 	}
 	scheme := u.Scheme
 	if scheme == "wss" {
@@ -165,7 +173,7 @@ func (c *Client) ValidateGatewayURL(value string) error {
 	if scheme == "ws" {
 		scheme = "http"
 	}
-	if scheme != c.baseURL.Scheme || !strings.EqualFold(u.Host, c.baseURL.Host) || !strings.HasPrefix(u.Path, "/") || strings.Contains(u.Path, "\\") {
+	if scheme != c.baseURL.Scheme || !strings.EqualFold(u.Host, c.baseURL.Host) {
 		return unsafeGateway()
 	}
 	return nil

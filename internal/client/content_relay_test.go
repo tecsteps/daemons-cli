@@ -155,12 +155,26 @@ func TestAccessTicketNegotiationKeepsPathsOutOfControlPlane(t *testing.T) {
 
 func TestGatewayAuthorityIsExact(t *testing.T) {
 	c, _ := New("https://control.example", "synthetic")
-	for _, value := range []string{"https://evil.example/v1/workspaces/x", "https://control.example:444/v1/workspaces/x", "http://control.example/v1/workspaces/x", "https://control.example/v1/workspaces/x?ticket=secret", "https://control.example/v1/workspaces/x?", "https://user@control.example/v1/workspaces/x", "https://control.example/v1/%77orkspaces/x"} {
+	for _, value := range []string{
+		"https://evil.example/v1/workspaces/x",
+		"https://control.example:444/v1/workspaces/x",
+		"http://control.example/v1/workspaces/x",
+		"https://control.example/v1/workspaces/x?ticket=secret",
+		"https://control.example/v1/workspaces/x?",
+		"https://user@control.example/v1/workspaces/x",
+		"https://control.example/v1/%77orkspaces/x",
+		"wss://evil.example:2222/ssh",
+		"wss://ssh.daemons.run/ssh",
+		"wss://ssh.daemons.run:2222/term",
+		"wss://ssh.daemons.run:2222/ssh/extra",
+		"ws://ssh.daemons.run:2222/ssh",
+		"https://ssh.daemons.run:2222/v1/workspaces/x",
+	} {
 		if c.ValidateGatewayURL(value) == nil {
 			t.Fatalf("accepted %s", value)
 		}
 	}
-	for _, value := range []string{"https://control.example/v1/workspaces/x", "wss://control.example/ssh"} {
+	for _, value := range []string{"https://control.example/v1/workspaces/x", "wss://control.example/ssh", "wss://ssh.daemons.run:2222/ssh"} {
 		if err := c.ValidateGatewayURL(value); err != nil {
 			t.Fatal(err)
 		}
