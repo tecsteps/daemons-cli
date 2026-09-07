@@ -610,6 +610,12 @@ func (c *Client) Upload(ctx context.Context, daemonID, filename string, file *os
 	if err := c.Preflight(ctx); err != nil {
 		return UploadResponse{}, err
 	}
+	c.preflightMu.Lock()
+	v2 := c.accessV2
+	c.preflightMu.Unlock()
+	if v2 {
+		return c.uploadAccess(ctx, daemonID, filename, file)
+	}
 	return c.upload(ctx, daemonID, filename, file)
 }
 

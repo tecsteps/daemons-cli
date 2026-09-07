@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/coder/websocket"
+	"github.com/tecsteps/daemons-cli/internal/client"
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
@@ -38,6 +39,9 @@ func sshProxy(ctx context.Context, args []string, opt globalOptions, d Dependenc
 	if gateway == "" {
 		gateway = api.GatewayURL()
 	}
+	if e = api.ValidateGatewayURL(gateway); e != nil {
+		return runResultFor(e)
+	}
 	if e = relaySSH(ctx, gateway, ticket.Data.Ticket, d); e != nil {
 		code := 1
 		if errors.Is(e, errAdmission) {
@@ -54,7 +58,7 @@ func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies) error
 	if ticket == "" {
 		return errors.New("missing SSH ticket")
 	}
-	hc := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
+	hc := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}, CheckRedirect: client.RejectGatewayRedirect}
 	ws, resp, e := websocket.Dial(ctx, gateway, &websocket.DialOptions{HTTPClient: hc, Subprotocols: []string{"dr." + ticket}, CompressionMode: websocket.CompressionDisabled})
 	if e != nil {
 		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
@@ -63,7 +67,7 @@ func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies) error
 		if websocket.CloseStatus(e) == 4403 {
 			return errAdmission
 		}
-		return fmt.Errorf("connect SSH gateway: %w", e)
+		return errors.New("unable to connect to SSH gateway")
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
 	ws.SetReadLimit(sshMaxBinaryFrameBytes)
@@ -86,7 +90,6 @@ func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies) error
 		return errors.New("invalid SSH gateway control frame")
 	}
 	if c.Type == "error" {
-		fmt.Fprintln(d.ErrorOutput, "SSH gateway:", c.Message)
 		return errAdmission
 	}
 	if string(data) != sshControlReady || c.Type != "ready" {

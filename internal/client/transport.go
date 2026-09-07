@@ -25,7 +25,10 @@ const maximumJSONResponse = 2 << 20
 
 type discoveryEnvelope struct {
 	Data struct {
-		Version string `json:"version"`
+		Version         string `json:"version"`
+		WorkspaceAccess struct {
+			TicketVersion int `json:"ticket_version"`
+		} `json:"workspace_access"`
 	} `json:"data"`
 }
 
@@ -44,6 +47,7 @@ func (c *Client) Preflight(ctx context.Context) error {
 		return err
 	}
 	c.preflighted = true
+	c.accessV2 = discovery.Data.WorkspaceAccess.TicketVersion == 2
 
 	return nil
 }
@@ -99,7 +103,11 @@ func (c *Client) doJSONWithHeaders(
 		}
 	}
 
-	response, err := c.http.Do(request)
+	requestClient := *c.http
+	if strings.HasSuffix(requestPath, "-tickets") || strings.HasSuffix(requestPath, "/ssh/ticket") {
+		requestClient.CheckRedirect = RejectGatewayRedirect
+	}
+	response, err := requestClient.Do(request)
 	if err != nil {
 		if idempotencyKey != "" {
 			return errs.New("outcome_unknown", "The mutation outcome at "+c.baseURL.String()+" is unknown. Reconcile the resource before retrying with the same idempotency key.", 8)

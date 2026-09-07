@@ -79,6 +79,9 @@ func showLogs(ctx context.Context, arguments []string, options globalOptions, de
 	if err != nil {
 		return err
 	}
+	if err := api.Preflight(ctx); err != nil {
+		return err
+	}
 	result, err := api.ListLogs(ctx, daemonID, source, level, cursor, limit)
 	if err != nil {
 		return err

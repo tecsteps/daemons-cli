@@ -39,6 +39,9 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 	if len(f.Positionals) != 1 {
 		return errs.New("usage_error", "Usage: daemons ssh-config DAEMON [--identity PATH] [--remove]", 2)
 	}
+	if !uuidPattern.MatchString(f.Positionals[0]) {
+		return errs.New("usage_error", "Managed SSH configuration requires a daemon UUID.", 2)
+	}
 	api, base, _, e := authenticatedClient(opt, d)
 	if e != nil {
 		return e
@@ -74,6 +77,13 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 		return e
 	}
 	known := filepath.Join(managed, "known_hosts")
+	oldKnown, e := os.ReadFile(known)
+	if e != nil && !errors.Is(e, fs.ErrNotExist) {
+		return e
+	}
+	if e = verifyKnownHost(oldKnown, f.Positionals[0], access.Data.HostKey); e != nil {
+		return e
+	}
 	config := filepath.Join(managed, "config")
 	mapPath := filepath.Join(managed, "aliases.json")
 	stanza := fmt.Sprintf("# daemons-run daemon %s\nHost %s\n    HostName ignored\n    User root\n    ProxyCommand %s ssh-proxy %s\n    IdentityFile %s\n    IdentitiesOnly yes\n    HostKeyAlias %s\n    UserKnownHostsFile %s\n    StrictHostKeyChecking yes\n    ForwardAgent no\n    ForwardX11 no\n", f.Positionals[0], alias, sshQuote(executablePath()), f.Positionals[0], sshQuote(identity), "dr-"+f.Positionals[0], sshQuote(known))
@@ -81,7 +91,6 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 	if e = atomicPrivate(config, replaceManagedStanza(string(prior), f.Positionals[0], stanza)); e != nil {
 		return e
 	}
-	oldKnown, _ := os.ReadFile(known)
 	lines := []string{}
 	for _, line := range strings.Split(string(oldKnown), "\n") {
 		if line != "" && !strings.HasPrefix(line, "dr-"+f.Positionals[0]+" ") {
@@ -92,7 +101,9 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 		return e
 	}
 	m := map[string]string{}
-	if priorMap, readErr := os.ReadFile(mapPath); readErr == nil { _ = json.Unmarshal(priorMap, &m) }
+	if priorMap, readErr := os.ReadFile(mapPath); readErr == nil {
+		_ = json.Unmarshal(priorMap, &m)
+	}
 	m[f.Positionals[0]] = alias
 	b, _ := json.Marshal(m)
 	if e = atomicPrivate(mapPath, b); e != nil {
@@ -119,6 +130,15 @@ func replaceManagedStanza(old, daemon, stanza string) []byte {
 		return []byte(old[:start] + stanza)
 	}
 	return []byte(old[:start] + stanza + old[start+len(marker)+end:])
+}
+
+func verifyKnownHost(existing []byte, daemon, key string) error {
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.HasPrefix(line, "dr-"+daemon+" ") && line != "dr-"+daemon+" "+key {
+			return errs.New("ssh_host_key_changed", "The guest host key changed. Verify the replacement independently before removing and recreating its managed configuration.", 10)
+		}
+	}
+	return nil
 }
 func sshRoot(_ string, env map[string]string) (string, error) {
 	h := env["HOME"]
@@ -202,32 +222,46 @@ func ensureInclude(root, config string) error {
 func removeSSHConfig(root, daemon string) error {
 	for _, name := range []string{"config", "known_hosts", "aliases.json"} {
 		p := filepath.Join(root, name)
-		if i, e := os.Lstat(p); e == nil {
-			if i.Mode()&os.ModeSymlink != 0 {
-				return errors.New("refusing SSH symlink target")
-			}
-			if e := os.Remove(p); e != nil {
-				return e
-			}
+		i, e := os.Lstat(p)
+		if errors.Is(e, fs.ErrNotExist) {
+			continue
 		}
-	}
-	// Remove only our two-line Include, preserving every user stanza.
-	sshConfig := filepath.Join(filepath.Dir(filepath.Dir(root)), "config")
-	if i, e := os.Lstat(sshConfig); e == nil {
-		if i.Mode()&os.ModeSymlink != 0 {
-			return errors.New("refusing SSH config symlink")
-		}
-		b, e := os.ReadFile(sshConfig)
 		if e != nil {
 			return e
 		}
-		line := "# daemons-run managed include\nInclude " + sshQuote(filepath.Join(root, "config")) + "\n"
-		if strings.Contains(string(b), line) {
-			if e := atomicPrivate(sshConfig, []byte(strings.Replace(string(b), line, "", 1))); e != nil {
+		if !i.Mode().IsRegular() {
+			return errors.New("refusing unsafe SSH target")
+		}
+		prior, e := os.ReadFile(p)
+		if e != nil {
+			return e
+		}
+		var next []byte
+		switch name {
+		case "config":
+			next = replaceManagedStanza(string(prior), daemon, "")
+		case "known_hosts":
+			lines := []string{}
+			for _, line := range strings.Split(string(prior), "\n") {
+				if line != "" && !strings.HasPrefix(line, "dr-"+daemon+" ") {
+					lines = append(lines, line)
+				}
+			}
+			next = []byte(strings.Join(lines, "\n") + "\n")
+		case "aliases.json":
+			aliases := map[string]string{}
+			if e = json.Unmarshal(prior, &aliases); e != nil {
+				return errors.New("invalid managed SSH alias map")
+			}
+			delete(aliases, daemon)
+			next, e = json.Marshal(aliases)
+			if e != nil {
 				return e
 			}
 		}
+		if e = atomicPrivate(p, next); e != nil {
+			return e
+		}
 	}
-	_ = daemon
 	return nil
 }

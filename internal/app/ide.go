@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 func ide(ctx context.Context, args []string, opt globalOptions, d Dependencies) error {
@@ -32,6 +33,9 @@ func ide(ctx context.Context, args []string, opt globalOptions, d Dependencies) 
 	if len(f.Positionals) != 1 || f.Values["--editor"] == "" {
 		return errs.New("usage_error", "Usage: daemons ide DAEMON --editor code|cursor|zed|jetbrains [--folder NAME] [--cached]", 2)
 	}
+	if e = validateIDETarget(f.Positionals[0], f.Values["--editor"], f.Values["--folder"]); e != nil {
+		return e
+	}
 	if !cached {
 		if e = sshConfig(ctx, []string{f.Positionals[0]}, opt, d); e != nil {
 			return e
@@ -52,9 +56,9 @@ func ide(ctx context.Context, args []string, opt globalOptions, d Dependencies) 
 	if e = preflight.Run(); e != nil {
 		return errs.New("ssh_preflight_failed", "SSH configuration preflight failed.", 1)
 	}
-	folder := "/root/workspace"
+	folder := "/root/workspace/default"
 	if f.Values["--folder"] != "" {
-		folder = filepath.Join(folder, f.Values["--folder"])
+		folder = filepath.Join("/root/workspace", f.Values["--folder"])
 	}
 	var cmd *exec.Cmd
 	switch f.Values["--editor"] {
@@ -71,6 +75,19 @@ func ide(ctx context.Context, args []string, opt globalOptions, d Dependencies) 
 	cmd.Stderr = d.ErrorOutput
 	if e = cmd.Run(); e != nil {
 		return errs.New("ide_launch_failed", fmt.Sprintf("Could not open %s.", f.Values["--editor"]), 1)
+	}
+	return nil
+}
+
+func validateIDETarget(daemon, editor, folder string) error {
+	if !uuidPattern.MatchString(daemon) {
+		return errs.New("usage_error", "IDE access requires a daemon UUID.", 2)
+	}
+	if editor != "code" && editor != "cursor" {
+		return errs.New("ide_not_certified", "The pilot targets VS Code and Cursor only. Zed and JetBrains are not certified.", 2)
+	}
+	if folder != "" && (!safeRelativeWorkspacePath(folder) || strings.ContainsAny(folder, "/\\?#%\r\n\x00")) {
+		return errs.New("usage_error", "Choose one workspace folder name.", 2)
 	}
 	return nil
 }

@@ -27,6 +27,7 @@ type Client struct {
 	warningMu   sync.Mutex
 	preflightMu sync.Mutex
 	preflighted bool
+	accessV2    bool
 }
 
 type Option func(*Client)

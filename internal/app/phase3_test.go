@@ -73,13 +73,13 @@ func TestPhaseThreeCommandsPreserveCanonicalJSON(t *testing.T) {
 			name:      "files list with path cursor and limit",
 			arguments: []string{"files", "list", "11111111-2222-3333-4444-555555555555", "src/app", "--cursor", "c1", "--limit", "50"},
 			responses: map[string]string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?cursor=c1&limit=50&path=src%2Fapp": filesPageTwo},
-			want:      []string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?cursor=c1&limit=50&path=src%2Fapp"},
+			want:      []string{"GET /api/v1", "GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?cursor=c1&limit=50&path=src%2Fapp"},
 		},
 		{
 			name:      "files list accepts the absolute path returned by upload",
 			arguments: []string{"files", "list", "11111111-2222-3333-4444-555555555555", "/root/workspace/uploads"},
 			responses: map[string]string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?path=uploads": filesPageTwo},
-			want:      []string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?path=uploads"},
+			want:      []string{"GET /api/v1", "GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?path=uploads"},
 		},
 		{
 			name:      "files list --all follows the cursor and writes one document per page",
@@ -88,14 +88,14 @@ func TestPhaseThreeCommandsPreserveCanonicalJSON(t *testing.T) {
 				"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files":           filesPageOne,
 				"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?cursor=c2": filesPageTwo,
 			},
-			want:   []string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files", "GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?cursor=c2"},
+			want:   []string{"GET /api/v1", "GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files", "GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/files?cursor=c2"},
 			stdout: filesPageOne + "\n" + filesPageTwo + "\n",
 		},
 		{
 			name:      "logs snapshot with a closed source",
 			arguments: []string{"logs", "11111111-2222-3333-4444-555555555555", "--source", "agent", "--level", "error", "--cursor", "41", "--limit", "10"},
 			responses: map[string]string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/logs?cursor=41&level=error&limit=10&source=agent": logsSnapshot},
-			want:      []string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/logs?cursor=41&level=error&limit=10&source=agent"},
+			want:      []string{"GET /api/v1", "GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/logs?cursor=41&level=error&limit=10&source=agent"},
 		},
 	}
 
@@ -354,7 +354,7 @@ func TestFilesListHumanOutputAndFailures(t *testing.T) {
 		var output, errorOutput bytes.Buffer
 		dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
 		code := Run(context.Background(), []string{"--host", server.URL, "files", "list", "11111111-2222-3333-4444-555555555555", "--all"}, dependencies)
-		if code != 1 || len(record.requests) != maximumListPages || !strings.Contains(errorOutput.String(), "listing_truncated") {
+		if code != 1 || len(record.requests) != maximumListPages+1 || !strings.Contains(errorOutput.String(), "listing_truncated") {
 			t.Fatalf("exit = %d, requests = %d, stderr = %q", code, len(record.requests), errorOutput.String())
 		}
 	})

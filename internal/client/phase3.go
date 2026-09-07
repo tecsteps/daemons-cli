@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -167,6 +168,25 @@ func (c *Client) CancelTask(ctx context.Context, daemonID, taskID, idempotencyKe
 // ListFiles reads one page of a workspace directory listing. The cursor is
 // opaque and comes from the previous page's meta.next_cursor.
 func (c *Client) ListFiles(ctx context.Context, daemonID, workspacePath, cursor string, limit int) (FileList, error) {
+	c.preflightMu.Lock()
+	v2 := c.accessV2
+	c.preflightMu.Unlock()
+	if v2 {
+		var result FileList
+		body, err := json.Marshal(map[string]any{"path": workspacePath, "cursor": cursor, "limit": limit})
+		if err != nil {
+			return result, err
+		}
+		var output boundedContentJSON
+		if err := c.AccessContent(ctx, daemonID, newAccessOperationID(), "files.read", bytes.NewReader(body), &output); err != nil {
+			return result, err
+		}
+		if err := decodeResponseJSON(output.Bytes(), &result); err != nil {
+			return result, invalidResponse("guest listing")
+		}
+		result.Raw = append(json.RawMessage(nil), output.Bytes()...)
+		return result, nil
+	}
 	query := url.Values{}
 	if workspacePath != "" {
 		query.Set("path", workspacePath)
@@ -211,6 +231,25 @@ func missingTaskField(task Task) string {
 // ListLogs reads one bounded, server-redacted log snapshot. The source is
 // validated by the caller against the closed set the server accepts.
 func (c *Client) ListLogs(ctx context.Context, daemonID, source, level, cursor string, limit int) (LogList, error) {
+	c.preflightMu.Lock()
+	v2 := c.accessV2
+	c.preflightMu.Unlock()
+	if v2 {
+		var result LogList
+		body, err := json.Marshal(map[string]any{"source": source, "level": level, "cursor": cursor, "limit": limit})
+		if err != nil {
+			return result, err
+		}
+		var output boundedContentJSON
+		if err := c.AccessContent(ctx, daemonID, newAccessOperationID(), "logs.read", bytes.NewReader(body), &output); err != nil {
+			return result, err
+		}
+		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+			return result, invalidResponse("data.logs")
+		}
+		result.Raw = append(json.RawMessage(nil), output.Bytes()...)
+		return result, nil
+	}
 	query := url.Values{}
 	query.Set("source", source)
 	if level != "" {

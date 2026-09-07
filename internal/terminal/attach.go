@@ -99,8 +99,12 @@ func connectSocket(ctx context.Context, api *client.Client, daemonID, session st
 	if err := validateGatewayURL(ticket.Data.GatewayURL); err != nil {
 		return nil, Outcome{ExitCode: 10}, err
 	}
+	if err := api.ValidateGatewayURL(ticket.Data.GatewayURL); err != nil {
+		return nil, Outcome{ExitCode: 10}, err
+	}
 
 	connection, response, err := websocket.Dial(ctx, ticket.Data.GatewayURL, &websocket.DialOptions{
+		HTTPClient:   api.GatewayHTTPClient(),
 		Subprotocols: []string{"dr." + ticket.Data.Ticket},
 	})
 	if err != nil {
@@ -172,7 +176,11 @@ func Run(ctx context.Context, connection *websocket.Conn, streams Streams) Outco
 	go func() {
 		for {
 			messageType, payload, err := connection.Read(ctx)
-			socketMessages <- socketMessage{messageType: messageType, payload: payload, err: err}
+			select {
+			case socketMessages <- socketMessage{messageType: messageType, payload: payload, err: err}:
+			case <-ctx.Done():
+				return
+			}
 			if err != nil {
 				return
 			}
@@ -184,7 +192,11 @@ func Run(ctx context.Context, connection *websocket.Conn, streams Streams) Outco
 		for {
 			count, err := streams.Input.Read(buffer)
 			payload := append([]byte(nil), buffer[:count]...)
-			inputMessages <- inputMessage{payload: payload, err: err}
+			select {
+			case inputMessages <- inputMessage{payload: payload, err: err}:
+			case <-ctx.Done():
+				return
+			}
 			if err != nil {
 				return
 			}

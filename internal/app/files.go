@@ -81,6 +81,9 @@ func listFiles(ctx context.Context, arguments []string, options globalOptions, d
 	}
 
 	writer := tabwriter.NewWriter(dependencies.Output, 0, 4, 2, ' ', 0)
+	if err := api.Preflight(ctx); err != nil {
+		return err
+	}
 	if !options.JSON {
 		fmt.Fprintln(writer, "TYPE\tSIZE\tMODIFIED\tNAME")
 	}
