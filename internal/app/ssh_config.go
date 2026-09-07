@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tecsteps/daemons-cli/internal/client"
 	"github.com/tecsteps/daemons-cli/internal/errs"
 	"io/fs"
 	"os"
@@ -86,7 +87,7 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 	}
 	config := filepath.Join(managed, "config")
 	mapPath := filepath.Join(managed, "aliases.json")
-	stanza := fmt.Sprintf("# daemons-run daemon %s\nHost %s\n    HostName ignored\n    User root\n    ProxyCommand %s ssh-proxy %s\n    IdentityFile %s\n    IdentitiesOnly yes\n    HostKeyAlias %s\n    UserKnownHostsFile %s\n    StrictHostKeyChecking yes\n    ForwardAgent no\n    ForwardX11 no\n", f.Positionals[0], alias, sshQuote(executablePath()), f.Positionals[0], sshQuote(identity), "dr-"+f.Positionals[0], sshQuote(known))
+	stanza := fmt.Sprintf("# daemons-run daemon %s\nHost %s\n    HostName %s\n    Port %s\n    User root\n    ProxyCommand %s ssh-proxy %s\n    IdentityFile %s\n    IdentitiesOnly yes\n    HostKeyAlias %s\n    UserKnownHostsFile %s\n    StrictHostKeyChecking yes\n    ForwardAgent no\n    ForwardX11 no\n    ServerAliveInterval 30\n    ServerAliveCountMax 3\n", f.Positionals[0], alias, client.SSHHostname, client.SSHPort, sshQuote(executablePath()), f.Positionals[0], sshQuote(identity), "dr-"+f.Positionals[0], sshQuote(known))
 	prior, _ := os.ReadFile(config)
 	if e = atomicPrivate(config, replaceManagedStanza(string(prior), f.Positionals[0], stanza)); e != nil {
 		return e

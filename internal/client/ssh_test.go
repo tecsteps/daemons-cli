@@ -24,3 +24,13 @@ func TestSSHClientUsesNestedRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGatewayURLUsesDNSOnlySSHHost(t *testing.T) {
+	c, err := New("https://daemons.run", "synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.GatewayURL(); got != "wss://ssh.daemons.run:2222/ssh" {
+		t.Fatalf("GatewayURL = %q", got)
+	}
+}

@@ -38,6 +38,16 @@ type SSHTicket struct {
 	Meta map[string]any `json:"meta"`
 }
 
+const (
+	SSHHostname    = "ssh.daemons.run"
+	SSHPort        = "2222"
+	sshGatewayPath = "/ssh"
+)
+
+func sshGatewayAuthority() string {
+	return SSHHostname + ":" + SSHPort
+}
+
 func (c *Client) SSH(ctx context.Context, daemon string) (SSHEnvelope, error) {
 	var r SSHEnvelope
 	err := c.doJSON(ctx, http.MethodGet, "/daemons/"+url.PathEscape(daemon)+"/ssh", nil, true, "", false, &r)
@@ -75,10 +85,7 @@ func (c *Client) SSHTicket(ctx context.Context, daemon string) (SSHTicket, error
 	}
 	return r, err
 }
+
 func (c *Client) GatewayURL() string {
-	u := *c.baseURL
-	u.Scheme = map[bool]string{true: "wss", false: "ws"}[u.Scheme == "https"]
-	u.Path = "/ssh"
-	u.RawQuery = ""
-	return u.String()
+	return "wss://" + sshGatewayAuthority() + sshGatewayPath
 }
