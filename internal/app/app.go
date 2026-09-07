@@ -41,6 +41,7 @@ Commands:
   task cancel DAEMON TASK
   task list DAEMON [--limit N]
   files list DAEMON [PATH] [--cursor CURSOR] [--limit N] [--all]
+  files download DAEMON PATH DESTINATION
   logs DAEMON --source agent|app|daemon|provisioning [--level LEVEL] [--cursor CURSOR] [--limit N]
   ssh enable|disable|keys ...
   ssh-config DAEMON [--identity PATH] [--remove]

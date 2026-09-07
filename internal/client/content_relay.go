@@ -46,6 +46,15 @@ func (c *Client) uploadAccess(ctx context.Context, daemonID, filename string, fi
 
 type boundedContentJSON struct{ buffer bytes.Buffer }
 
+// DownloadFile keeps the path in the guest stream and copies bytes with bounded memory.
+func (c *Client) DownloadFile(ctx context.Context, daemonID, workspacePath string, destination io.Writer) error {
+	selector, err := json.Marshal(map[string]string{"path": workspacePath})
+	if err != nil || len(selector) > 16384 {
+		return errs.New("relay_limit", "The download selector is too large.", 2)
+	}
+	return c.AccessContent(ctx, daemonID, newAccessOperationID(), "files.download", bytes.NewReader(selector), destination)
+}
+
 func (b *boundedContentJSON) Bytes() []byte { return b.buffer.Bytes() }
 
 func (b *boundedContentJSON) Write(value []byte) (int, error) {
