@@ -14,7 +14,7 @@ func TestV2TaskSubmissionKeepsPayloadInGuestChannel(t *testing.T) {
 	const workspace = "baf324d3-dcc9-469a-986e-19e0d6779422"
 	const organization = "caf324d3-dcc9-469a-986e-19e0d6779422"
 	const folder = "daf324d3-dcc9-469a-986e-19e0d6779422"
-	for _, outcome := range []string{"queued", "denied", "wrong-task", "trailing", "oversized"} {
+	for _, outcome := range []string{"queued", "completed", "denied", "wrong-task", "trailing", "oversized"} {
 		t.Run(outcome, func(t *testing.T) {
 			var taskID, operationID string
 			submissions := 0
@@ -69,11 +69,15 @@ func TestV2TaskSubmissionKeepsPayloadInGuestChannel(t *testing.T) {
 						return
 					}
 					id := taskID
+					status := "queued"
+					if outcome == "completed" {
+						status = "completed"
+					}
 					if outcome == "wrong-task" {
 						id = folder
 					}
 					json.NewEncoder(w).Encode(map[string]any{"receipt": LocalPayloadReceipt{LocalPayloadTarget: LocalPayloadTarget{OrganizationID: organization, WorkspaceID: workspace, RuntimeGeneration: 1, AssignmentGeneration: 1},
-						PayloadID: operationID, OperationID: operationID, Revision: 1, Phase: "applied"}, "task": map[string]string{"id": id, "attempt_id": folder, "status": "queued"}})
+						PayloadID: operationID, OperationID: operationID, Revision: 1, Phase: "applied"}, "task": map[string]string{"id": id, "attempt_id": folder, "status": status}})
 					if outcome == "trailing" {
 						io.WriteString(w, `{}`)
 					}
@@ -88,7 +92,7 @@ func TestV2TaskSubmissionKeepsPayloadInGuestChannel(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, err := c.CreateTask(context.Background(), workspace, TaskRequest{Prompt: "private task prompt", PermissionMode: "approval-auto-deny"}, "local-key")
-			if (err == nil) != (outcome == "queued") {
+			if (err == nil) != (outcome == "queued" || outcome == "completed") {
 				t.Fatalf("unexpected submission outcome: %v", err)
 			}
 			if outcome == "queued" && (result.Data.ID != taskID || result.Data.Status != "queued" || len(result.Raw) == 0) {
@@ -97,6 +101,25 @@ func TestV2TaskSubmissionKeepsPayloadInGuestChannel(t *testing.T) {
 			if submissions != 1 {
 				t.Errorf("submission replayed: %d", submissions)
 			}
+			if err == nil {
+				firstTask, firstOperation := taskID, operationID
+				repeated, retryErr := c.CreateTask(context.Background(), workspace, TaskRequest{Prompt: "private task prompt", PermissionMode: "approval-auto-deny"}, "local-key")
+				if retryErr != nil || repeated.Data.ID != firstTask || operationID != firstOperation || repeated.Data.Status != outcome || submissions != 2 {
+					t.Fatalf("explicit retry did not preserve identity: %v", retryErr)
+				}
+			}
 		})
+	}
+}
+
+func TestTaskSubmissionIdentityIsScopedAndStable(t *testing.T) {
+	first := taskSubmissionID("workspace-a", "key-a", "task")
+	if !payloadUUID.MatchString(first) || first != taskSubmissionID("workspace-a", "key-a", "task") {
+		t.Fatal("invalid or unstable task identity")
+	}
+	for _, other := range []string{taskSubmissionID("workspace-b", "key-a", "task"), taskSubmissionID("workspace-a", "key-b", "task"), taskSubmissionID("workspace-a", "key-a", "operation")} {
+		if first == other {
+			t.Fatal("task identity scope collision")
+		}
 	}
 }

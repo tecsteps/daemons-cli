@@ -100,7 +100,7 @@ func (c *Client) CreateTask(ctx context.Context, daemonID string, task TaskReque
 	v2 := c.accessV2
 	c.preflightMu.Unlock()
 	if v2 {
-		return c.createGuestTask(ctx, daemonID, task)
+		return c.createGuestTask(ctx, daemonID, task, idempotencyKey)
 	}
 	body := map[string]any{"prompt": task.Prompt}
 	if task.Agent != "" {
