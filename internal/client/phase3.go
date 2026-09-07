@@ -96,6 +96,12 @@ func (c *Client) CreateTask(ctx context.Context, daemonID string, task TaskReque
 	if err := c.Preflight(ctx); err != nil {
 		return TaskEnvelope{}, err
 	}
+	c.preflightMu.Lock()
+	v2 := c.accessV2
+	c.preflightMu.Unlock()
+	if v2 {
+		return c.createGuestTask(ctx, daemonID, task)
+	}
 	body := map[string]any{"prompt": task.Prompt}
 	if task.Agent != "" {
 		body["agent"] = task.Agent
