@@ -15,6 +15,20 @@ import (
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
+func TestV2ProvisioningLogsRemainStructuredControlPlaneMetadata(t *testing.T) {
+	api := phaseTwoServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/daemons/workspace/logs" || r.URL.Query().Get("source") != "provisioning" {
+			t.Errorf("unexpected provisioning request %s %s", r.Method, r.URL.Path)
+		}
+		io.WriteString(w, `{"data":[{"source":"provisioning","level":"info","message":"ready"}],"meta":{"next_cursor":"7"}}`)
+	})
+	api.accessV2 = true
+	result, err := api.ListLogs(context.Background(), "workspace", "provisioning", "", "6", 100)
+	if err != nil || len(result.Data) != 1 || result.Data[0].Source != "provisioning" {
+		t.Fatalf("result %+v, error %v", result, err)
+	}
+}
+
 func TestV2CommandsKeepSelectorsAndUploadOutOfControlPlane(t *testing.T) {
 	var relays atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

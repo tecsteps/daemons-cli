@@ -329,7 +329,8 @@ func (c *Client) ListLogs(ctx context.Context, daemonID, source, level, cursor s
 	c.preflightMu.Lock()
 	v2 := c.accessV2
 	c.preflightMu.Unlock()
-	if v2 {
+	// Provisioning events are control-plane metadata, not guest journal content.
+	if v2 && source != "provisioning" {
 		var result LogList
 		body, err := json.Marshal(map[string]any{"source": source, "level": level, "cursor": cursor, "limit": limit})
 		if err != nil {
