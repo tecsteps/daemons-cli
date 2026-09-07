@@ -13,6 +13,70 @@ import (
 
 const accessTaskID = "aaf324d3-dcc9-469a-986e-19e0d6779422"
 
+func TestV2TaskCancellationUsesMetadataTicketAndGuestAcknowledgment(t *testing.T) {
+	for _, status := range []string{"cancelling", "cancelled", "running", "wrong-id", "oversized", "trailing", "denied"} {
+		t.Run(status, func(t *testing.T) {
+			var calls int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Daemons-Api-Version", "v1")
+				switch r.URL.Path {
+				case "/api/v1":
+					io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
+				case "/api/v1/daemons/workspace/access-tickets":
+					var metadata map[string]string
+					json.NewDecoder(r.Body).Decode(&metadata)
+					if len(metadata) != 3 || metadata["action"] != "tasks.cancel" || metadata["task_uuid"] != accessTaskID || !payloadUUID.MatchString(metadata["operation_uuid"]) {
+						t.Error("invalid cancellation metadata")
+					}
+					json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"ticket": "guest.ticket", "ticket_version": 2, "expires_in": 30,
+						"method": "POST", "gateway_path": "/v1/workspaces/workspace/tasks/" + accessTaskID + "/cancel"}})
+				case "/v1/workspaces/workspace/tasks/" + accessTaskID + "/cancel":
+					calls++
+					body, _ := io.ReadAll(r.Body)
+					if string(body) != "{}" || r.Header.Get("Authorization") != "DaemonsTicket guest.ticket" || r.Method != "POST" {
+						t.Error("incorrect guest cancellation boundary")
+					}
+					if status == "denied" {
+						w.WriteHeader(403)
+						return
+					}
+					if status == "oversized" {
+						io.WriteString(w, strings.Repeat("x", 128*1024+1))
+						return
+					}
+					id := accessTaskID
+					if status == "wrong-id" {
+						id = "other"
+					}
+					json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": id, "status": status}, "meta": map[string]any{"cancellation_pending": status == "cancelling"}})
+					if status == "trailing" {
+						io.WriteString(w, `{}`)
+					}
+				default:
+					t.Error("legacy cancellation or unexpected route reached")
+					w.WriteHeader(404)
+				}
+			}))
+			defer server.Close()
+			c, err := New(server.URL, "cp-token")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := c.CancelTask(context.Background(), "workspace", accessTaskID, "local-idempotency-key")
+			valid := status == "cancelling" || status == "cancelled"
+			if (err == nil) != valid {
+				t.Fatalf("unexpected cancellation outcome: %v", err)
+			}
+			if valid && result.Data.Status != status {
+				t.Error("cancellation status changed")
+			}
+			if calls != 1 {
+				t.Errorf("cancellation was replayed: %d requests", calls)
+			}
+		})
+	}
+}
+
 func taskQueryServer(t *testing.T, reply func(http.ResponseWriter, map[string]any)) (*Client, *atomic.Int32) {
 	t.Helper()
 	var calls atomic.Int32

@@ -220,6 +220,31 @@ func (c *Client) CancelTask(ctx context.Context, daemonID, taskID, idempotencyKe
 		return TaskEnvelope{}, err
 	}
 	var result TaskEnvelope
+	c.preflightMu.Lock()
+	v2 := c.accessV2
+	c.preflightMu.Unlock()
+	if v2 {
+		ticket, err := c.mintAccessTicket(ctx, daemonID, newAccessOperationID(), "tasks.cancel", taskID)
+		if err != nil {
+			return result, err
+		}
+		u := *c.baseURL
+		u.Path, u.RawPath = ticket.Data.GatewayPath, ""
+		output := boundedContentJSON{maximum: 128 * 1024}
+		if err := c.relayContent(ctx, ticket.Data.Method, u.String(), ticket.Data.Ticket, bytes.NewReader([]byte("{}")), &output); err != nil {
+			return result, err
+		}
+		if !json.Valid(output.Bytes()) || decodeResponseJSON(output.Bytes(), &result) != nil || missingTaskField(result.Data) != "" || result.Data.ID != taskID {
+			return TaskEnvelope{}, invalidMutationResponse("guest task cancellation")
+		}
+		switch result.Data.Status {
+		case "cancelling", "cancelled", "completed", "failed", "interrupted":
+		default:
+			return TaskEnvelope{}, invalidMutationResponse("guest task cancellation status")
+		}
+		result.Raw = append(json.RawMessage(nil), output.Bytes()...)
+		return result, nil
+	}
 	err := c.doJSON(ctx, http.MethodPost, "/daemons/"+url.PathEscape(daemonID)+"/tasks/"+url.PathEscape(taskID)+"/cancel", nil, true, idempotencyKey, true, &result)
 	if err == nil {
 		if field := missingTaskField(result.Data); field != "" {

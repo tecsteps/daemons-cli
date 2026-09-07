@@ -94,18 +94,36 @@ type AccessTicket struct {
 
 // MintAccessTicket sends only public identifiers and a closed action name.
 func (c *Client) MintAccessTicket(ctx context.Context, daemonID, operationID, action string) (AccessTicket, error) {
+	return c.mintAccessTicket(ctx, daemonID, operationID, action, "")
+}
+
+func (c *Client) mintAccessTicket(ctx context.Context, daemonID, operationID, action, taskID string) (AccessTicket, error) {
 	var result AccessTicket
+	metadata := map[string]string{"action": action, "operation_uuid": operationID}
+	if action == "tasks.submit" || action == "tasks.cancel" {
+		if !payloadUUID.MatchString(taskID) || !payloadUUID.MatchString(operationID) {
+			return result, invalidResponse("task identity")
+		}
+		metadata["task_uuid"] = taskID
+	} else if taskID != "" {
+		return result, invalidResponse("task action")
+	}
 	if err := c.Preflight(ctx); err != nil {
 		return result, err
 	}
-	err := c.doJSON(ctx, http.MethodPost, "/daemons/"+url.PathEscape(daemonID)+"/access-tickets", map[string]string{
-		"action": action, "operation_uuid": operationID,
-	}, true, "", true, &result)
+	err := c.doJSON(ctx, http.MethodPost, "/daemons/"+url.PathEscape(daemonID)+"/access-tickets", metadata, true, "", true, &result)
 	if err != nil {
 		return result, err
 	}
 	suffix := map[string]string{"files.read": "/files/query", "files.download": "/files/downloads", "files.upload": "/files/uploads/" + operationID, "logs.read": "/logs/query", "logs.download": "/logs/downloads", "local_payload.put": "/local-payloads/" + operationID, "local_payload.receipt": "/local-payloads/" + operationID, "tasks.read": "/tasks/query"}[action]
 	method := http.MethodPost
+	if action == "tasks.cancel" {
+		suffix = "/tasks/" + taskID + "/cancel"
+	}
+	if action == "tasks.submit" {
+		suffix = "/tasks/" + taskID
+		method = http.MethodPut
+	}
 	if action == "files.upload" || action == "local_payload.put" {
 		method = http.MethodPut
 	}
@@ -115,7 +133,7 @@ func (c *Client) MintAccessTicket(ctx context.Context, daemonID, operationID, ac
 	if suffix == "" || result.Data.Version != 2 || result.Data.ExpiresIn < 1 || result.Data.ExpiresIn > 30 || result.Data.Method != method || result.Data.GatewayPath != "/v1/workspaces/"+daemonID+suffix {
 		return AccessTicket{}, invalidResponse("data.access_ticket")
 	}
-	if strings.HasPrefix(action, "local_payload.") && (!result.Data.Target.valid(daemonID) || !payloadUUID.MatchString(operationID)) {
+	if (strings.HasPrefix(action, "local_payload.") || action == "tasks.submit") && (!result.Data.Target.valid(daemonID) || !payloadUUID.MatchString(operationID)) {
 		return AccessTicket{}, invalidResponse("data.target")
 	}
 	return result, nil
