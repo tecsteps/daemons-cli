@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -21,6 +22,21 @@ type reconcileGuide struct {
 	Check          string
 	Replay         string
 	IdempotencyKey string
+}
+
+func shellArgument(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
+
+// Preserve every command parameter on replay, including the original ETag.
+func replayCommand(command string, arguments []string) string {
+	parts := []string{"daemons", command}
+	for i := 0; i < len(arguments); i++ {
+		if arguments[i] == "--idempotency-key" {
+			i++
+			continue
+		}
+		parts = append(parts, shellArgument(arguments[i]))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (guide reconcileGuide) write(dependencies Dependencies) {
@@ -41,7 +57,18 @@ func (guide reconcileGuide) write(dependencies Dependencies) {
 func mutationFailure(err error, options globalOptions, dependencies Dependencies, guide reconcileGuide) runResult {
 	var apiError *errs.APIError
 	if errors.As(err, &apiError) && apiError.Code == "confirmation_required" {
-		return presentConfirmation(apiError, options, dependencies)
+		result := presentConfirmation(apiError, options, dependencies)
+		if guide.Replay != "" {
+			fmt.Fprintf(dependencies.ErrorOutput, "After approval, replay the exact command: %s --idempotency-key %s\n", guide.Replay, guide.IdempotencyKey)
+		}
+		return result
+	}
+	if options.JSON && errors.As(err, &apiError) {
+		writeMutationError(dependencies, apiError)
+		if errs.ExitCode(err) == 8 {
+			guide.write(dependencies)
+		}
+		return runResult{code: errs.ExitCode(err), err: err, reported: true}
 	}
 	if errs.ExitCode(err) == 8 {
 		writeError(dependencies, options.JSON, err)
@@ -51,6 +78,19 @@ func mutationFailure(err error, options globalOptions, dependencies Dependencies
 	return runResultFor(err)
 }
 
+func writeMutationError(dependencies Dependencies, err error) {
+	raw := errs.RawProblem(err)
+	var original any
+	if len(raw) > 0 && json.Unmarshal(raw, &original) == nil {
+		normalized, _ := json.Marshal(original)
+		if bytes.Equal(normalized, sanitizeProblem(raw)) {
+			writeCanonicalJSON(dependencies.Output, raw)
+			return
+		}
+	}
+	writeError(dependencies, true, err)
+}
+
 // presentConfirmation shows a confirmation_required refusal. The request had
 // no side effect. In JSON or non-interactive mode the canonical problem is
 // written and nothing is opened; interactively the CLI offers to open the
@@ -58,7 +98,7 @@ func mutationFailure(err error, options globalOptions, dependencies Dependencies
 func presentConfirmation(apiError *errs.APIError, options globalOptions, dependencies Dependencies) runResult {
 	result := runResult{code: 6, err: apiError, reported: true}
 	if options.JSON {
-		writeError(dependencies, true, apiError)
+		writeMutationError(dependencies, apiError)
 		return result
 	}
 
@@ -172,7 +212,7 @@ func operationOutcome(current client.Operation, options globalOptions, dependenc
 	switch current.Status {
 	case "partially_succeeded":
 		fmt.Fprintf(dependencies.ErrorOutput, "The operation only partly succeeded; inspect its result above and the resource before retrying.\n")
-	case "outcome_unknown":
+	case "outcome_unknown", "reconciling":
 		guide.write(dependencies)
 	}
 	result.reported = true
@@ -181,6 +221,12 @@ func operationOutcome(current client.Operation, options globalOptions, dependenc
 
 func writeOperation(dependencies Dependencies, current client.Operation) {
 	fmt.Fprintf(dependencies.Output, "Operation %s: %s (%s)\n", current.ID, current.Status, current.Type)
+	if current.Phase != "" {
+		fmt.Fprintf(dependencies.Output, "  phase: %s\n", current.Phase)
+	}
+	if current.DaemonID != "" {
+		fmt.Fprintf(dependencies.Output, "  daemon: %s\n", current.DaemonID)
+	}
 	if current.Resource != nil && current.Resource.ID != "" {
 		fmt.Fprintf(dependencies.Output, "  resource: %s %s\n", current.Resource.Type, current.Resource.ID)
 	}

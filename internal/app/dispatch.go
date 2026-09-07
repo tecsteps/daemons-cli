@@ -14,12 +14,11 @@ var commandRegistry = map[string]commandHandler{
 	"logout":          errorHandler(logout),
 	"whoami":          errorHandler(whoami),
 	"capabilities":    errorHandler(capabilities),
-	"servers list":    errorHandler(listServers),
-	"servers show":    errorHandler(showServer),
 	"list":            errorHandler(listDaemons),
 	"ls":              errorHandler(listDaemons),
 	"daemons list":    errorHandler(listDaemons),
 	"show":            errorHandler(showDaemon),
+	"status":          errorHandler(showDaemon),
 	"daemons show":    errorHandler(showDaemon),
 	"start":           startDaemon,
 	"daemons start":   startDaemon,
@@ -30,23 +29,47 @@ var commandRegistry = map[string]commandHandler{
 	"retry":           retryDaemon,
 	"daemons retry":   retryDaemon,
 	"spawn":           spawnDaemon,
-	"daemons spawn":   spawnDaemon,
-	"destroy":         destroyDaemon,
-	"daemons destroy": destroyDaemon,
-	"operations list": errorHandler(listOperations),
-	"operations show": showOperation,
-	"attach":          errorHandler(attach),
-	"upload":          uploadFiles,
-	"task run":        runTask,
-	"task show":       showTask,
-	"task cancel":     cancelTask,
-	"task list":       errorHandler(listTasks),
-	"files list":      errorHandler(listFiles),
-	"logs":            errorHandler(showLogs),
-	"ssh":             ssh,
-	"ssh-config":      errorHandler(sshConfig),
-	"ssh-proxy":       sshProxy,
-	"ide":             errorHandler(ide),
+	"create":          spawnDaemon,
+	"daemons create":  spawnDaemon,
+	"pause":           lifecycleHandler("pause"),
+	"resume":          lifecycleHandler("resume"),
+	"resize":          lifecycleHandler("resize"),
+	"force-restart": func(ctx context.Context, args []string, options globalOptions, deps Dependencies) runResult {
+		if helpRequested(args) {
+			return lifecycleDaemon(ctx, "restart", args, options, deps)
+		}
+		return lifecycleDaemon(ctx, "restart", append(args, "--force"), options, deps)
+	},
+	"rename":              renameDaemon,
+	"daemons spawn":       spawnDaemon,
+	"destroy":             destroyDaemon,
+	"delete":              destroyDaemon,
+	"daemons delete":      destroyDaemon,
+	"daemons destroy":     destroyDaemon,
+	"operations list":     errorHandler(listOperations),
+	"operations show":     showOperation,
+	"operations wait":     operationHandler("wait"),
+	"operations cancel":   operationHandler("cancel"),
+	"operations retry":    operationHandler("retry"),
+	"operations continue": operationHandler("continue"),
+	"attach":              errorHandler(attach),
+	"upload":              uploadFiles,
+	"task run":            runTask,
+	"task show":           showTask,
+	"task cancel":         cancelTask,
+	"task list":           errorHandler(listTasks),
+	"files list":          errorHandler(listFiles),
+	"logs":                errorHandler(showLogs),
+	"ssh":                 ssh,
+	"ssh-config":          errorHandler(sshConfig),
+	"ssh-proxy":           sshProxy,
+	"ide":                 errorHandler(ide),
+}
+
+func lifecycleHandler(action string) commandHandler {
+	return func(ctx context.Context, args []string, options globalOptions, deps Dependencies) runResult {
+		return lifecycleDaemon(ctx, action, args, options, deps)
+	}
 }
 
 func dispatch(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) runResult {

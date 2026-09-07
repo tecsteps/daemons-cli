@@ -95,10 +95,11 @@ func TestPhaseTwoCommandsPreserveCanonicalJSON(t *testing.T) {
 			body: map[string]any{"server_id": "server-uuid", "name": "research"},
 		},
 		{
+			// E7 retries durable operations through the operation endpoint.
 			name:      "daemons retry",
 			arguments: []string{"daemons", "retry", "daemon-uuid", "--idempotency-key", "phase2-retry-key"},
-			responses: map[string]string{"POST /api/v1/daemons/daemon-uuid/retry": retryResponse},
-			want:      []string{"GET /api/v1", "POST /api/v1/daemons/daemon-uuid/retry"},
+			responses: map[string]string{"POST /api/v1/operations/daemon-uuid/retry": retryResponse},
+			want:      []string{"GET /api/v1", "POST /api/v1/operations/daemon-uuid/retry"},
 			key:       "phase2-retry-key",
 		},
 		{
@@ -143,6 +144,13 @@ func TestPhaseTwoCommandsPreserveCanonicalJSON(t *testing.T) {
 			var output, errorOutput bytes.Buffer
 			dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
 			arguments := append([]string{"--json", "--host", server.URL}, test.arguments...)
+			// E7 rejects server selection locally; retain both legacy spawn cases as rejection tests.
+			if strings.Contains(test.name, "server") {
+				if code := Run(context.Background(), arguments, dependencies); code != 2 || len(record.requests) != 0 || !strings.Contains(output.String(), `"code":"server_selection_removed"`) {
+					t.Fatalf("exit %d, requests %v, output %s", code, record.requests, output.String())
+				}
+				return
+			}
 			if code := Run(context.Background(), arguments, dependencies); code != 0 {
 				t.Fatalf("exit = %d, stdout = %q, stderr = %q", code, output.String(), errorOutput.String())
 			}
@@ -196,12 +204,13 @@ func TestPhaseTwoLocalValidationSendsNothing(t *testing.T) {
 }
 
 func TestSpawnValidationFailureRendersFieldErrors(t *testing.T) {
+	// E7 uses fleet metadata so this test reaches the same validation, polling or transport boundary.
 	server, _ := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.WriteHeader(http.StatusUnprocessableEntity)
 		io.WriteString(writer, `{"status":422,"code":"validation_failed","detail":"One or more fields are invalid.","errors":{"name":["The name has already been taken."]},"meta":{}}`)
 	})
-	arguments := []string{"--host", server.URL, "spawn", "research", "--server", "11111111-2222-3333-4444-555555555555", "--idempotency-key", "phase2-spawn-key"}
+	arguments := []string{"--host", server.URL, "spawn", "research", "--size", "small", "--variant", "burstable", "--agent", "codex", "--assigned-user", lifecycleWorkspace, "--creation-team", lifecycleOther, "--idempotency-key", "phase2-spawn-key"}
 
 	var output, errorOutput bytes.Buffer
 	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
@@ -243,7 +252,8 @@ func TestDestroyConfirmationRequired(t *testing.T) {
 		dependencies.Input = strings.NewReader("y\n")
 		dependencies.OpenURL = func(target string) error { opened = append(opened, target); return nil }
 		code := Run(context.Background(), []string{"--json", "--host", server.URL, "destroy", "daemon-uuid", "--idempotency-key", "phase2-destroy-key"}, dependencies)
-		if code != 6 || len(opened) != 0 || errorOutput.Len() != 0 {
+		// E7 prints the exact confirmation replay identity on stderr even in JSON mode.
+		if code != 6 || len(opened) != 0 || !strings.Contains(errorOutput.String(), `--etag '"etag-1"' --idempotency-key phase2-destroy-key`) {
 			t.Fatalf("exit = %d, opened = %v, stderr = %q", code, opened, errorOutput.String())
 		}
 		if !strings.Contains(output.String(), `"code":"confirmation_required"`) || !strings.Contains(output.String(), `"confirmation_id":"confirmation-uuid"`) {
@@ -313,6 +323,7 @@ func TestDestroyPreconditionFailedRefetchesAndDoesNotResubmit(t *testing.T) {
 }
 
 func TestWaitFlagPollsToTerminalState(t *testing.T) {
+	// E7 uses fleet metadata so this test reaches the same validation, polling or transport boundary.
 	polls := 0
 	running := `{"data":{"id":"operation-uuid","type":"daemon.spawn","status":"running","result":[],"retryable":false},"meta":[]}`
 	succeeded := `{"data":{"id":"operation-uuid","type":"daemon.spawn","status":"succeeded","result":{"daemon_status":"running"},"retryable":false},"meta":[]}`
@@ -338,7 +349,7 @@ func TestWaitFlagPollsToTerminalState(t *testing.T) {
 	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
 	sleeps := []time.Duration{}
 	dependencies.Sleep = func(_ context.Context, duration time.Duration) error { sleeps = append(sleeps, duration); return nil }
-	code := Run(context.Background(), []string{"--json", "--host", server.URL, "spawn", "research", "--server", "11111111-2222-3333-4444-555555555555", "--wait", "--idempotency-key", "phase2-spawn-key"}, dependencies)
+	code := Run(context.Background(), []string{"--json", "--host", server.URL, "spawn", "research", "--size", "small", "--variant", "burstable", "--agent", "codex", "--assigned-user", lifecycleWorkspace, "--creation-team", lifecycleOther, "--wait", "--idempotency-key", "phase2-spawn-key"}, dependencies)
 	if code != 0 {
 		t.Fatalf("exit = %d, stdout = %q, stderr = %q", code, output.String(), errorOutput.String())
 	}
@@ -357,6 +368,7 @@ func TestWaitFlagPollsToTerminalState(t *testing.T) {
 }
 
 func TestJSONWaitPollFailureDoesNotDuplicateInitialDocument(t *testing.T) {
+	// E7 uses fleet metadata so this test reaches the same validation, polling or transport boundary.
 	invalidPoll := `{"data":{"id":"operation-uuid","type":"daemon.spawn","result":[]},"meta":[]}`
 	server, _ := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodPost {
@@ -370,7 +382,7 @@ func TestJSONWaitPollFailureDoesNotDuplicateInitialDocument(t *testing.T) {
 	var output, errorOutput bytes.Buffer
 	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
 	dependencies.Sleep = func(context.Context, time.Duration) error { return nil }
-	code := Run(context.Background(), []string{"--json", "--host", server.URL, "spawn", "research", "--server", "11111111-2222-3333-4444-555555555555", "--wait", "--idempotency-key", "phase2-spawn-key"}, dependencies)
+	code := Run(context.Background(), []string{"--json", "--host", server.URL, "spawn", "research", "--size", "small", "--variant", "burstable", "--agent", "codex", "--assigned-user", lifecycleWorkspace, "--creation-team", lifecycleOther, "--wait", "--idempotency-key", "phase2-spawn-key"}, dependencies)
 	if code != 1 || strings.Count(output.String(), spawnResponse) != 1 {
 		t.Fatalf("exit = %d, stdout = %q, stderr = %q", code, output.String(), errorOutput.String())
 	}
@@ -410,7 +422,8 @@ func TestWaitFlagTimeoutIsOutcomeUnknownWithGuidance(t *testing.T) {
 		t.Fatalf("exit = %d, stderr = %q", code, errorOutput.String())
 	}
 	stderr := errorOutput.String()
-	for _, fragment := range []string{"wait_timeout", "daemons operations show operation-uuid", "daemons show daemon-uuid", "phase2-retry-key", "Never retry under a new idempotency key"} {
+	// E7 retry targets an operation, so reconciliation refers to that operation.
+	for _, fragment := range []string{"wait_timeout", "daemons operations show operation-uuid", "daemons operations show daemon-uuid", "phase2-retry-key", "Never retry under a new idempotency key"} {
 		if !strings.Contains(stderr, fragment) {
 			t.Fatalf("stderr = %q missing %q", stderr, fragment)
 		}
@@ -434,7 +447,8 @@ func TestWaitFlagPartialSuccessIsVisibleFailure(t *testing.T) {
 	var output, errorOutput bytes.Buffer
 	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
 	dependencies.Sleep = func(context.Context, time.Duration) error { return nil }
-	code := Run(context.Background(), []string{"--host", server.URL, "start", "daemon-uuid", "--wait", "--idempotency-key", "phase2-start-key"}, dependencies)
+	// E7 pins the revision to isolate partial-operation polling from the ETag read.
+	code := Run(context.Background(), []string{"--host", server.URL, "start", "daemon-uuid", "--etag", `"revision-1"`, "--wait", "--idempotency-key", "phase2-start-key"}, dependencies)
 	if code != 1 || !strings.Contains(errorOutput.String(), "agent_install_failed") || !strings.Contains(errorOutput.String(), "only partly succeeded") {
 		t.Fatalf("exit = %d, stderr = %q", code, errorOutput.String())
 	}
@@ -444,6 +458,7 @@ func TestWaitFlagPartialSuccessIsVisibleFailure(t *testing.T) {
 }
 
 func TestSpawnTransportFailureAfterDispatchIsOutcomeUnknown(t *testing.T) {
+	// E7 uses fleet metadata so this test reaches the same validation, polling or transport boundary.
 	server, record := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, _ *http.Request) {
 		hijacker, ok := writer.(http.Hijacker)
 		if !ok {
@@ -457,7 +472,7 @@ func TestSpawnTransportFailureAfterDispatchIsOutcomeUnknown(t *testing.T) {
 	})
 	var output, errorOutput bytes.Buffer
 	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
-	code := Run(context.Background(), []string{"--host", server.URL, "spawn", "research", "--server", "11111111-2222-3333-4444-555555555555", "--idempotency-key", "phase2-spawn-key"}, dependencies)
+	code := Run(context.Background(), []string{"--host", server.URL, "spawn", "research", "--size", "small", "--variant", "burstable", "--agent", "codex", "--assigned-user", lifecycleWorkspace, "--creation-team", lifecycleOther, "--idempotency-key", "phase2-spawn-key"}, dependencies)
 	// Go's transport may replay a request carrying Idempotency-Key once when a
 	// reused connection dies before any response; that replay must carry the
 	// identical key, and the CLI itself never submits under a new one.

@@ -60,32 +60,36 @@ func TestDestroyDaemonSendsIfMatchAndIdempotencyKey(t *testing.T) {
 }
 
 func TestSpawnDaemonBodyOmitsUnsetOptionalFields(t *testing.T) {
+	// E7 replaces server/quota selection with fleet metadata and nullable price consent.
 	var body map[string]any
 	api := phaseTwoServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		writer.WriteHeader(http.StatusAccepted)
 		io.WriteString(writer, `{"data":{"id":"daemon-uuid","name":"research","status":"provisioning","server":{"id":"server-uuid","name":"host","status":"running"}},"meta":{"operation":{"id":"op","type":"daemon.spawn","status":"queued"}}}`)
 	})
-	result, err := api.SpawnDaemon(context.Background(), SpawnRequest{ServerID: "server-uuid", Name: "research"}, "spawn-key-1")
+	spawn := SpawnRequest{Name: "research", Size: "small", Variant: "burstable", Source: "empty", AssignedUserID: "user-uuid", CreationTeamID: "team-uuid"}
+	result, err := api.SpawnDaemon(context.Background(), spawn, "spawn-key-1")
 	if err != nil || result.Meta.Operation.ID != "op" || result.Data.ID != "daemon-uuid" {
 		t.Fatalf("err = %v, result = %+v", err, result)
 	}
-	if len(body) != 2 || body["server_id"] != "server-uuid" || body["name"] != "research" {
+	if len(body) != 7 || body["size"] != "small" || body["variant"] != "burstable" || body["source"] != "empty" || body["assigned_user_id"] != "user-uuid" || body["creation_team_id"] != "team-uuid" || body["accepted_offer_id"] != nil || body["name"] != "research" {
 		t.Fatalf("body = %v", body)
 	}
 
-	result, err = api.SpawnDaemon(context.Background(), SpawnRequest{ServerID: "server-uuid", Name: "research", PrimaryAgent: "codex", DiskQuotaGB: 20}, "spawn-key-2")
-	if err != nil || body["primary_agent"] != "codex" || body["disk_quota_gb"] != float64(20) {
+	spawn.PrimaryAgent, spawn.TeamID, spawn.AcceptedOfferID = "codex", "group-uuid", "offer-uuid"
+	result, err = api.SpawnDaemon(context.Background(), spawn, "spawn-key-2")
+	if err != nil || len(body) != 9 || body["primary_agent"] != "codex" || body["team_id"] != "group-uuid" || body["accepted_offer_id"] != "offer-uuid" {
 		t.Fatalf("err = %v, body = %v", err, body)
 	}
 }
 
 func TestSpawnDaemonWithoutOperationIsOutcomeUnknown(t *testing.T) {
+	// E7 requires fleet metadata to reach the missing-operation response check.
 	api := phaseTwoServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusAccepted)
 		io.WriteString(writer, `{"data":{"id":"daemon-uuid","name":"research","status":"provisioning"},"meta":{}}`)
 	})
-	_, err := api.SpawnDaemon(context.Background(), SpawnRequest{ServerID: "server-uuid", Name: "research"}, "spawn-key-3")
+	_, err := api.SpawnDaemon(context.Background(), SpawnRequest{Name: "research", Size: "small", Variant: "burstable", Source: "empty", PrimaryAgent: "codex", AssignedUserID: "user-uuid", CreationTeamID: "team-uuid"}, "spawn-key-3")
 	if errs.Code(err) != "outcome_unknown" || errs.ExitCode(err) != 8 {
 		t.Fatalf("err = %v, code = %q", err, errs.Code(err))
 	}

@@ -83,7 +83,6 @@ Run `daemons help` for the full list. Every command accepts `--help`. Global opt
 | --- | --- | --- |
 | `daemons whoami` | `GET /api/v1/me` | `control-plane:discover` |
 | `daemons capabilities` | `GET /api/v1/capabilities` | `control-plane:discover` |
-| `daemons servers list` / `servers show ID` | `GET /api/v1/servers[/{server}]` | `servers:read` |
 | `daemons list` (alias `ls`) / `show ID` | `GET /api/v1/daemons[/{daemon}]` | `daemons:read` |
 | `daemons operations list [--limit N]` | `GET /api/v1/operations?limit=N` (1 to 200) | `operations:read` |
 | `daemons operations show ID` | `GET /api/v1/operations/{operation}` | `operations:read` |
@@ -115,13 +114,33 @@ Every mutation takes `--idempotency-key KEY` (8 to 128 characters of letters, di
 
 | Command | API route | Scope |
 | --- | --- | --- |
-| `daemons spawn NAME --server SERVER [--agent AGENT] [--disk-quota-gb N]` | `POST /api/v1/daemons` | `daemons:write` (plus `servers:read` when `--server` is a name) |
-| `daemons start\|stop\|restart\|retry ID` | `POST /api/v1/daemons/{daemon}/{action}` | `daemons:write` |
-| `daemons destroy ID [--etag ETAG]` | `GET /api/v1/daemons/{daemon}` then `DELETE /api/v1/daemons/{daemon}` with `If-Match` | `daemons:read`, `daemons:destroy` |
+| `daemons create NAME --size small\|medium\|large --variant burstable\|reserved --agent AGENT --assigned-user UUID --creation-team UUID` | `POST /api/v1/daemons` | `daemons:write` |
+| `daemons start\|stop\|pause\|resume ID [--etag ETAG]` | `POST /api/v1/daemons/{daemon}/{action}` with `If-Match` | `daemons:write` |
+| `daemons restart ID [--force] [--etag ETAG]` | `POST /api/v1/daemons/{daemon}/restart`, `{force:false\|true}` | `daemons:write` |
+| `daemons resize ID --size SIZE --accepted-offer UUID [--etag ETAG]` | `POST /api/v1/daemons/{daemon}/resize`, `{size,accepted_offer_id}` | `daemons:write` |
+| `daemons delete ID [--etag ETAG]` | `DELETE /api/v1/daemons/{daemon}` with `If-Match` and browser approval | `daemons:destroy` |
+| `daemons rename ID NAME [--etag ETAG]` | `PATCH /api/v1/daemons/{daemon}`, `{name}` with `If-Match` | `daemons:write` |
+| `daemons stop UUID...` | `POST /api/v1/daemons/bulk/stop`, `{daemon_ids:[...]}` | `daemons:write` |
+| `daemons operations cancel\|retry ID` | `POST /api/v1/operations/{operation}/{action}` | `daemons:write` plus workspace capability |
+| `daemons operations wait ID [--wait-timeout DURATION]` | `GET /api/v1/operations/{operation}` | `operations:read` |
 
-`--server` accepts the server UUID or its exact name (no prefix matching). `daemons spawn` prints the new daemon and its `daemon.spawn` operation; in `--json` mode stdout is the API's 202 document with the operation under `meta.operation`.
+`spawn` aliases `create`, `destroy` aliases `delete`, `status` aliases `show`, and `force-restart` aliases `restart --force`. `retry ID` targets an operation, as does `operations retry ID`. Customer server commands, server selection and disk quota flags are removed. Workspace displays have no server column. Use exact workspace UUIDs for lifecycle commands.
 
-`daemons destroy` reads the daemon first to capture its `ETag` and sends it as `If-Match`, so a daemon that changed in between is never destroyed blindly. Pass `--etag` to pin a value you captured yourself and skip the read. On `412 precondition_failed` the CLI re-reads the daemon, shows its current state and new ETag, and exits 1 without resubmitting.
+Create sends only metadata. Optional flags are `--source empty|payload`, `--team UUID` and `--accepted-offer UUID`; source defaults to `empty`. The assignee and creation team are required, and the optional grouping team does not replace the creation team. The API currently returns only `meta.operation.uuid` on create; `--wait` polls that ID. Accepted offers are references to approved prices, never client-supplied monetary amounts. Resize is upward only while Running (or supported disk-full Unhealthy), with no variant switch. Stop retains compute at the active price; Pause releases compute at the paused price.
+
+The published API does not yet expose E4's authorized local payload receipt and streaming endpoints. `create --repo URL [--branch BRANCH]`, `create --payload-file PATH`, and `operations continue ID --payload-file PATH` fail before any create, file read or upload. Metadata-only `--source payload` remains available for an assignee using a separate authorized uploader; the CLI warns that its own uploader is unavailable. Content stays on the device; the payload deadline is 15 minutes after target readiness, never during a capacity wait. The CLI does not upload repository input to metadata or ordinary file endpoints. Additional agents, labels and descriptions are also not accepted by the landed create API and have no CLI flags yet.
+
+Force restart sends `force:true` and preserves the API's confirmation denial; the current API always denies force and supplies no approval URL. Bulk delete is refused locally because the landed `/daemons/bulk/destroy` endpoint does not enforce confirmation bound to the complete UUID/revision set. Single delete retains browser approval. These are upstream integration gaps, not completed lifecycle capabilities.
+
+Bulk stop normalizes and deduplicates exact UUIDs in one request so the API can reject a denied selection before any mutation. Every returned outcome is printed, including failures. A partial failure exits 1; `--wait` polls all accepted child operations within one total timeout. Missing outcomes produce exit 8. The bulk API does not currently accept per-item ETags.
+
+Single-workspace lifecycle commands, rename and delete read the daemon to capture its `ETag` and send it as `If-Match`. Pass `--etag` to pin a value and skip the read. A stale precondition exits 1 without resubmitting. Delete also re-reads to explain the changed state. Replay guidance preserves the original command options, ETag and idempotency key. Browser approval never creates a replacement key.
+
+### Waiting for the API
+
+- E4 local payload receipt lookup and streaming routes are not published. Repository and payload-file commands fail before creating a workspace, reading a file or uploading content.
+- Bulk delete lacks confirmation bound to the complete UUID/revision set on `/daemons/bulk/destroy`. The CLI refuses bulk deletion before sending any request.
+- Force restart currently returns the API's confirmation denial without an approval URL. Additional agents, labels and descriptions are not accepted by the create API, and bulk stop does not accept per-item ETags.
 
 ### Waiting for operations
 

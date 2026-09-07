@@ -57,7 +57,9 @@ type Daemon struct {
 		ID     string `json:"id"`
 		Name   string `json:"name"`
 		Status string `json:"status"`
-	} `json:"server"`
+	} `json:"-"`
+	Size      string `json:"size,omitempty"`
+	Variant   string `json:"variant,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -96,10 +98,17 @@ type DaemonSpawnEnvelope struct {
 func (response *DaemonSpawnEnvelope) setRaw(raw json.RawMessage) { response.Raw = raw }
 
 type SpawnRequest struct {
-	ServerID     string
-	Name         string
-	PrimaryAgent string
-	DiskQuotaGB  int
+	ServerID        string
+	Name            string
+	PrimaryAgent    string
+	DiskQuotaGB     int
+	Size            string
+	Variant         string
+	Source          string
+	AssignedUserID  string
+	CreationTeamID  string
+	TeamID          string
+	AcceptedOfferID string
 }
 
 type Server struct {
@@ -150,10 +159,15 @@ type CapabilityList struct {
 func (response *CapabilityList) setRaw(raw json.RawMessage) { response.Raw = raw }
 
 type Operation struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Status   string `json:"status"`
-	Resource *struct {
+	UUID       string  `json:"uuid,omitempty"`
+	State      string  `json:"state,omitempty"`
+	Phase      string  `json:"phase,omitempty"`
+	DaemonID   string  `json:"daemon_id,omitempty"`
+	ReasonCode *string `json:"reason_code,omitempty"`
+	ID         string  `json:"id"`
+	Type       string  `json:"type"`
+	Status     string  `json:"status"`
+	Resource   *struct {
 		Type string `json:"type"`
 		ID   string `json:"id"`
 	} `json:"resource"`
@@ -162,6 +176,27 @@ type Operation struct {
 	Retryable bool           `json:"retryable"`
 	CreatedAt string         `json:"created_at"`
 	UpdatedAt string         `json:"updated_at"`
+}
+
+// UnmarshalJSON accepts both the lifecycle projection and older task operations.
+// Raw envelopes retain the exact wire document for JSON output.
+func (operation *Operation) UnmarshalJSON(raw []byte) error {
+	type wire Operation
+	var value wire
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	*operation = Operation(value)
+	if operation.ID == "" {
+		operation.ID = operation.UUID
+	}
+	if operation.State != "" {
+		operation.Status = operation.State
+	}
+	if operation.ReasonCode != nil {
+		operation.ErrorCode = operation.ReasonCode
+	}
+	return nil
 }
 
 type OperationEnvelope struct {
@@ -325,12 +360,23 @@ func (c *Client) ShowDaemon(ctx context.Context, daemonID string) (DaemonEnvelop
 }
 
 func (c *Client) LifecycleDaemon(ctx context.Context, daemonID, action, idempotencyKey string) (OperationEnvelope, error) {
+	return c.LifecycleDaemonWithOptions(ctx, daemonID, action, "", idempotencyKey, nil)
+}
+
+func (c *Client) LifecycleDaemonWithOptions(ctx context.Context, daemonID, action, etag, idempotencyKey string, body map[string]any) (OperationEnvelope, error) {
 	if err := c.Preflight(ctx); err != nil {
 		return OperationEnvelope{}, err
 	}
 	var result OperationEnvelope
-	err := c.doJSON(ctx, http.MethodPost, "/daemons/"+url.PathEscape(daemonID)+"/"+action, nil, true, idempotencyKey, true, &result)
+	headers := http.Header{}
+	if etag != "" {
+		headers.Set("If-Match", etag)
+	}
+	err := c.doJSONWithHeaders(ctx, http.MethodPost, "/daemons/"+url.PathEscape(daemonID)+"/"+action, body, true, idempotencyKey, true, headers, &result)
 	if err == nil {
+		if result.Data.Type == "" && result.Data.UUID != "" {
+			result.Data.Type = "daemon." + action
+		}
 		if field := missingOperationField(result.Data); field != "" {
 			return OperationEnvelope{}, invalidMutationResponse("data." + field)
 		}
@@ -338,13 +384,100 @@ func (c *Client) LifecycleDaemon(ctx context.Context, daemonID, action, idempote
 	return result, err
 }
 
+func (c *Client) RenameDaemon(ctx context.Context, daemonID, name, etag, key string) (DaemonEnvelope, error) {
+	var result DaemonEnvelope
+	if err := c.Preflight(ctx); err != nil {
+		return result, err
+	}
+	err := c.doJSONWithHeaders(ctx, http.MethodPatch, "/daemons/"+url.PathEscape(daemonID), map[string]any{"name": name}, true, key, true, http.Header{"If-Match": []string{etag}}, &result)
+	if err == nil {
+		if field := missingDaemonField(result.Data); field != "" {
+			return result, invalidMutationResponse("data." + field)
+		}
+	}
+	return result, err
+}
+
+func (c *Client) MutateOperation(ctx context.Context, id, action, key string) (OperationEnvelope, error) {
+	var result OperationEnvelope
+	if action != "cancel" && action != "retry" {
+		return result, errs.New("usage_error", "Unsupported operation action.", 2)
+	}
+	if err := c.Preflight(ctx); err != nil {
+		return result, err
+	}
+	err := c.doJSON(ctx, http.MethodPost, "/operations/"+url.PathEscape(id)+"/"+action, nil, true, key, true, &result)
+	if err == nil {
+		if field := missingOperationField(result.Data); field != "" {
+			return result, invalidMutationResponse("data." + field)
+		}
+	}
+	return result, err
+}
+
+type BulkOutcome struct {
+	DaemonID    string  `json:"daemon_id"`
+	OperationID *string `json:"operation_id"`
+	Status      string  `json:"status"`
+	Code        *string `json:"code"`
+}
+
+type BulkEnvelope struct {
+	Data struct {
+		Outcomes []BulkOutcome `json:"outcomes"`
+	} `json:"data"`
+	Meta map[string]any  `json:"meta"`
+	Raw  json.RawMessage `json:"-"`
+}
+
+func (response *BulkEnvelope) setRaw(raw json.RawMessage) { response.Raw = raw }
+
+func (c *Client) BulkDaemons(ctx context.Context, action string, ids []string, key string) (BulkEnvelope, error) {
+	var result BulkEnvelope
+	// The published bulk destroy route does not enforce the frozen confirmation
+	// or revision-set precondition. Do not expose that bypass in this client.
+	if action != "stop" {
+		return result, errs.New("confirmation_unavailable", "Bulk deletion is unavailable until the API supports confirmation bound to the complete revision set. Delete each workspace with browser confirmation.", 6)
+	}
+	if err := c.Preflight(ctx); err != nil {
+		return result, err
+	}
+	err := c.doJSON(ctx, http.MethodPost, "/daemons/bulk/stop", map[string]any{"daemon_ids": ids}, true, key, true, &result)
+	if err == nil {
+		seen := map[string]bool{}
+		for _, outcome := range result.Data.Outcomes {
+			if seen[outcome.DaemonID] || outcome.DaemonID == "" || (outcome.Status != "accepted" && outcome.Status != "failed") || (outcome.Status == "accepted" && (outcome.OperationID == nil || *outcome.OperationID == "")) {
+				return result, invalidMutationResponse("data.outcomes")
+			}
+			seen[outcome.DaemonID] = true
+		}
+		if len(seen) != len(ids) {
+			return result, invalidMutationResponse("data.outcomes")
+		}
+		for _, id := range ids {
+			if !seen[id] {
+				return result, invalidMutationResponse("data.outcomes")
+			}
+		}
+	}
+	return result, err
+}
+
 func (c *Client) SpawnDaemon(ctx context.Context, spawn SpawnRequest, idempotencyKey string) (DaemonSpawnEnvelope, error) {
+	if spawn.ServerID != "" || spawn.DiskQuotaGB != 0 {
+		return DaemonSpawnEnvelope{}, errs.New("server_selection_removed", "Server selection and disk quotas are no longer supported.", 2)
+	}
 	if err := c.Preflight(ctx); err != nil {
 		return DaemonSpawnEnvelope{}, err
 	}
-	body := map[string]any{
-		"server_id": spawn.ServerID,
-		"name":      spawn.Name,
+	body := map[string]any{"name": spawn.Name, "size": spawn.Size, "variant": spawn.Variant,
+		"source": spawn.Source, "assigned_user_id": spawn.AssignedUserID, "creation_team_id": spawn.CreationTeamID,
+		"accepted_offer_id": nil}
+	if spawn.TeamID != "" {
+		body["team_id"] = spawn.TeamID
+	}
+	if spawn.AcceptedOfferID != "" {
+		body["accepted_offer_id"] = spawn.AcceptedOfferID
 	}
 	if spawn.PrimaryAgent != "" {
 		body["primary_agent"] = spawn.PrimaryAgent
@@ -358,8 +491,14 @@ func (c *Client) SpawnDaemon(ctx context.Context, spawn SpawnRequest, idempotenc
 		if field := missingDaemonField(result.Data); field != "" {
 			return DaemonSpawnEnvelope{}, invalidMutationResponse("data." + field)
 		}
-		if field := missingOperationField(result.Meta.Operation); field != "" {
-			return DaemonSpawnEnvelope{}, invalidMutationResponse("meta.operation." + field)
+		if result.Meta.Operation.ID == "" {
+			return DaemonSpawnEnvelope{}, invalidMutationResponse("meta.operation.uuid")
+		}
+		if result.Meta.Operation.Type == "" {
+			result.Meta.Operation.Type = "daemon.create"
+		}
+		if result.Meta.Operation.Status == "" {
+			result.Meta.Operation.Status = "queued"
 		}
 	}
 	return result, err

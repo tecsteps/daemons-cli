@@ -13,6 +13,51 @@ import (
 
 const operationsListUsage = "Usage: daemons operations list [--limit N]"
 
+func operationHandler(action string) commandHandler {
+	return func(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) runResult {
+		usage := "Usage: daemons operations " + action + " ID [--wait] [--wait-timeout DURATION] [--idempotency-key KEY]"
+		if action == "continue" {
+			usage = "Usage: daemons operations continue ID --payload-file PATH"
+		}
+		if helpRequested(arguments) {
+			fmt.Fprintln(dependencies.Output, usage)
+			return runResult{}
+		}
+		flags, err := parseMutationFlags(arguments, []string{"--payload-file"}, usage, options, dependencies)
+		if err != nil {
+			return runResultFor(err)
+		}
+		if len(flags.Positionals) != 1 {
+			return runResultFor(errs.New("usage_error", usage, 2))
+		}
+		if action == "continue" {
+			return runResultFor(client.LocalPayloadUnavailable())
+		}
+		if action != "wait" {
+			if err := ensureIdempotencyKey(&flags, options, dependencies); err != nil {
+				return runResultFor(err)
+			}
+		}
+		api, _, _, err := authenticatedClient(options, dependencies)
+		if err != nil {
+			return runResultFor(err)
+		}
+		id := flags.Positionals[0]
+		guide := reconcileGuide{Check: "daemons operations show " + id, Replay: replayCommand("operations "+action, arguments), IdempotencyKey: flags.IdempotencyKey}
+		var result client.OperationEnvelope
+		if action == "wait" {
+			flags.Wait = true
+			result, err = api.ShowOperation(ctx, id)
+		} else {
+			result, err = api.MutateOperation(ctx, id, action, flags.IdempotencyKey)
+		}
+		if err != nil {
+			return mutationFailure(err, options, dependencies, guide)
+		}
+		return finishOperation(ctx, api, result, flags, options, dependencies, guide)
+	}
+}
+
 func listOperations(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) error {
 	if helpRequested(arguments) {
 		fmt.Fprintln(dependencies.Output, operationsListUsage)
@@ -91,7 +136,7 @@ func operationResult(operation client.Operation, alreadyReported bool) runResult
 			code = *operation.ErrorCode
 		}
 		err = errs.NewOperation(code, fmt.Sprintf("Operation %s ended with status %s.", operation.ID, operation.Status), operation.Status, 1)
-	case "outcome_unknown":
+	case "outcome_unknown", "reconciling":
 		err = errs.NewOperation("outcome_unknown", fmt.Sprintf("Operation %s has an unknown outcome; reconcile its resource before retrying.", operation.ID), operation.Status, 8)
 	}
 	if err == nil {

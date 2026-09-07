@@ -3,12 +3,23 @@ package operation
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/tecsteps/daemons-cli/internal/client"
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
+
+func TestE7WaitHonorsHTTPDateRetryAfter(t *testing.T) {
+	start := time.Unix(0, 0).UTC()
+	now, sleep, sleeps := fakeClock(start)
+	poller := &fakePoller{responses: []client.OperationEnvelope{envelope("succeeded", "")}}
+	_, err := Wait(context.Background(), poller, envelope("waiting", start.Add(9*time.Second).Format(http.TimeFormat)), Options{Now: now, Sleep: sleep})
+	if err != nil || len(*sleeps) != 1 || (*sleeps)[0] != 9*time.Second {
+		t.Fatalf("sleeps %v error %v", *sleeps, err)
+	}
+}
 
 type fakePoller struct {
 	responses []client.OperationEnvelope

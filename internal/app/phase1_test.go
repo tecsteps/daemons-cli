@@ -111,6 +111,9 @@ func TestPhaseOneCommandsPreserveCanonicalJSON(t *testing.T) {
 					http.NotFound(writer, request)
 					return
 				}
+				if test.mutation && request.Header.Get("If-Match") != `"revision-1"` {
+					t.Errorf("If-Match = %q", request.Header.Get("If-Match"))
+				}
 				if request.Header.Get("Idempotency-Key") != test.operationKey {
 					t.Errorf("Idempotency-Key = %q, want %q", request.Header.Get("Idempotency-Key"), test.operationKey)
 				}
@@ -123,6 +126,17 @@ func TestPhaseOneCommandsPreserveCanonicalJSON(t *testing.T) {
 			dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
 			arguments := []string{"--json", "--host", server.URL, "--request-id", "phase1-request"}
 			arguments = append(arguments, test.arguments...)
+			// E7 withdraws customer server commands; retain their cases as local rejection checks.
+			if strings.HasPrefix(test.name, "servers ") {
+				if code := Run(context.Background(), arguments, dependencies); code != 2 || len(requests) != 0 || !strings.Contains(output.String(), `"code":"usage_error"`) {
+					t.Fatalf("exit %d, requests %v, output %s", code, requests, output.String())
+				}
+				return
+			}
+			// E7 lifecycle mutations require a pinned revision or an authorized ETag read.
+			if test.mutation {
+				arguments = append(arguments, "--etag", `"revision-1"`)
+			}
 			if code := Run(context.Background(), arguments, dependencies); code != 0 {
 				t.Fatalf("exit = %d, stdout = %q, stderr = %q", code, output.String(), errorOutput.String())
 			}
@@ -183,7 +197,8 @@ func TestLifecycleIdempotencyRequirementsAndGeneration(t *testing.T) {
 			generated++
 			return "generated-phase1-key", nil
 		}
-		code := Run(context.Background(), []string{"--host", server.URL, "start", "daemon-uuid"}, dependencies)
+		// E7 pins the lifecycle revision so this case still isolates key generation.
+		code := Run(context.Background(), []string{"--host", server.URL, "start", "daemon-uuid", "--etag", `"revision-1"`}, dependencies)
 		if code != 0 || generated != 1 || mutationKey != "generated-phase1-key" {
 			t.Fatalf("exit = %d, generated = %d, mutation key = %q", code, generated, mutationKey)
 		}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -58,6 +59,8 @@ func Wait(ctx context.Context, poller Poller, initial client.OperationEnvelope, 
 	}
 
 	deadline := options.Now().Add(options.Timeout)
+	pollContext, cancel := context.WithTimeout(ctx, options.Timeout)
+	defer cancel()
 	delay := options.Interval
 	for {
 		remaining := deadline.Sub(options.Now())
@@ -80,10 +83,13 @@ func Wait(ctx context.Context, poller Poller, initial client.OperationEnvelope, 
 			return last, timeout(last.Data, options.Timeout)
 		}
 
-		next, err := poller.ShowOperation(ctx, last.Data.ID)
+		next, err := poller.ShowOperation(pollContext, last.Data.ID)
 		if err != nil {
 			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return last, errs.NewOperation("wait_interrupted", fmt.Sprintf("Stopped waiting for operation %s; it continues on the server.", last.Data.ID), last.Data.Status, 1)
+			}
+			if pollContext.Err() != nil {
+				return last, timeout(last.Data, options.Timeout)
 			}
 			return last, err
 		}
@@ -110,6 +116,11 @@ func timeout(operation client.Operation, limit time.Duration) error {
 func nextDelay(retryAfter string, delay time.Duration, options Options) time.Duration {
 	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
 		return time.Duration(seconds) * time.Second
+	}
+	if date, err := http.ParseTime(retryAfter); err == nil {
+		if pause := date.Sub(options.Now()); pause > 0 {
+			return pause
+		}
 	}
 	return delay + options.Jitter(delay)
 }
