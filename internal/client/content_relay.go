@@ -104,7 +104,7 @@ func (c *Client) MintAccessTicket(ctx context.Context, daemonID, operationID, ac
 	if err != nil {
 		return result, err
 	}
-	suffix := map[string]string{"files.read": "/files/query", "files.download": "/files/downloads", "files.upload": "/files/uploads/" + operationID, "logs.read": "/logs/query", "logs.download": "/logs/downloads", "local_payload.put": "/local-payloads/" + operationID, "local_payload.receipt": "/local-payloads/" + operationID}[action]
+	suffix := map[string]string{"files.read": "/files/query", "files.download": "/files/downloads", "files.upload": "/files/uploads/" + operationID, "logs.read": "/logs/query", "logs.download": "/logs/downloads", "local_payload.put": "/local-payloads/" + operationID, "local_payload.receipt": "/local-payloads/" + operationID, "tasks.read": "/tasks/query"}[action]
 	method := http.MethodPost
 	if action == "files.upload" || action == "local_payload.put" {
 		method = http.MethodPut

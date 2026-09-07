@@ -10,9 +10,8 @@ import (
 	"strconv"
 )
 
-// Task is the Control Plane task resource returned by the nested
-// /daemons/{daemon}/tasks routes. Tasks are always addressed through their
-// parent daemon; there is no top-level task route.
+// Task is a workspace-local task resource. V2 task queries transfer directly
+// through the admitted gateway; only legacy servers use the nested API routes.
 type Task struct {
 	ID                string         `json:"id"`
 	DaemonID          string         `json:"daemon_id"`
@@ -124,6 +123,29 @@ func (c *Client) CreateTask(ctx context.Context, daemonID string, task TaskReque
 }
 
 func (c *Client) ListTasks(ctx context.Context, daemonID string, limit int) (TaskList, error) {
+	if err := c.Preflight(ctx); err != nil {
+		return TaskList{}, err
+	}
+	c.preflightMu.Lock()
+	v2 := c.accessV2
+	c.preflightMu.Unlock()
+	if v2 {
+		var result TaskList
+		raw, err := c.queryTasks(ctx, daemonID, map[string]any{"operation": "list", "limit": limit}, &result)
+		if err != nil {
+			return result, err
+		}
+		if result.Data == nil {
+			return TaskList{}, invalidResponse("data")
+		}
+		for index, task := range result.Data {
+			if field := missingTaskField(task); field != "" {
+				return TaskList{}, invalidResponse(fmt.Sprintf("data[%d].%s", index, field))
+			}
+		}
+		result.Raw = raw
+		return result, nil
+	}
 	requestPath := "/daemons/" + url.PathEscape(daemonID) + "/tasks"
 	if limit > 0 {
 		requestPath += "?limit=" + strconv.Itoa(limit)
@@ -141,6 +163,30 @@ func (c *Client) ListTasks(ctx context.Context, daemonID string, limit int) (Tas
 }
 
 func (c *Client) ShowTask(ctx context.Context, daemonID, taskID string) (TaskEnvelope, error) {
+	if err := c.Preflight(ctx); err != nil {
+		return TaskEnvelope{}, err
+	}
+	c.preflightMu.Lock()
+	v2 := c.accessV2
+	c.preflightMu.Unlock()
+	if v2 {
+		var result TaskEnvelope
+		if !payloadUUID.MatchString(taskID) {
+			return result, invalidResponse("task identifier")
+		}
+		raw, err := c.queryTasks(ctx, daemonID, map[string]any{"operation": "show", "task_id": taskID}, &result)
+		if err != nil {
+			return result, err
+		}
+		if field := missingTaskField(result.Data); field != "" {
+			return TaskEnvelope{}, invalidResponse("data." + field)
+		}
+		if result.Data.ID != taskID {
+			return TaskEnvelope{}, invalidResponse("data.id")
+		}
+		result.Raw = raw
+		return result, nil
+	}
 	var result TaskEnvelope
 	err := c.doJSON(ctx, http.MethodGet, "/daemons/"+url.PathEscape(daemonID)+"/tasks/"+url.PathEscape(taskID), nil, true, "", false, &result)
 	if err == nil {
@@ -149,6 +195,24 @@ func (c *Client) ShowTask(ctx context.Context, daemonID, taskID string) (TaskEnv
 		}
 	}
 	return result, err
+}
+
+func (c *Client) queryTasks(ctx context.Context, daemonID string, selector map[string]any, destination any) (json.RawMessage, error) {
+	body, err := json.Marshal(selector)
+	if err != nil || len(body) > 16384 {
+		return nil, invalidResponse("task selector")
+	}
+	output := boundedContentJSON{maximum: 128 * 1024}
+	if err := c.AccessContent(ctx, daemonID, newAccessOperationID(), "tasks.read", bytes.NewReader(body), &output); err != nil {
+		return nil, err
+	}
+	if !json.Valid(output.Bytes()) {
+		return nil, invalidResponse("guest task response")
+	}
+	if err := decodeResponseJSON(output.Bytes(), destination); err != nil {
+		return nil, invalidResponse("guest task response")
+	}
+	return append(json.RawMessage(nil), output.Bytes()...), nil
 }
 
 func (c *Client) CancelTask(ctx context.Context, daemonID, taskID, idempotencyKey string) (TaskEnvelope, error) {

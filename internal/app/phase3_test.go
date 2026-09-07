@@ -54,7 +54,7 @@ func TestPhaseThreeCommandsPreserveCanonicalJSON(t *testing.T) {
 			name:      "task show",
 			arguments: []string{"task", "show", "research", "task-uuid"},
 			responses: map[string]string{"GET /api/v1/daemons": daemonList, "GET /api/v1/daemons/daemon-uuid/tasks/task-uuid": taskSucceeded},
-			want:      []string{"GET /api/v1/daemons", "GET /api/v1/daemons/daemon-uuid/tasks/task-uuid"},
+			want:      []string{"GET /api/v1/daemons", "GET /api/v1", "GET /api/v1/daemons/daemon-uuid/tasks/task-uuid"},
 		},
 		{
 			name:      "task cancel",
@@ -67,7 +67,7 @@ func TestPhaseThreeCommandsPreserveCanonicalJSON(t *testing.T) {
 			name:      "task list",
 			arguments: []string{"task", "list", "11111111-2222-3333-4444-555555555555", "--limit", "5"},
 			responses: map[string]string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/tasks?limit=5": `{"data":[{"id":"task-uuid","status":"queued","agent":"codex"}],"meta":{"next_cursor":null}}`},
-			want:      []string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/tasks?limit=5"},
+			want:      []string{"GET /api/v1", "GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/tasks?limit=5"},
 		},
 		{
 			name:      "files list with path cursor and limit",
