@@ -383,6 +383,25 @@ func TestFilesListHumanOutputAndFailures(t *testing.T) {
 	}
 }
 
+func TestLogsContinuationHintPreservesLevelAndLimit(t *testing.T) {
+	server, _ := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("level") != "error" || request.URL.Query().Get("limit") != "1" {
+			t.Errorf("log selector was not preserved")
+		}
+		io.WriteString(writer, logsSnapshot)
+	})
+	var output, errorOutput bytes.Buffer
+	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
+	code := Run(context.Background(), []string{"--host", server.URL, "logs", "11111111-2222-3333-4444-555555555555", "--source", "app", "--level", "error", "--limit", "1"}, dependencies)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errorOutput.String())
+	}
+	want := "Next: daemons logs 11111111-2222-3333-4444-555555555555 --source app --level error --limit 1 --cursor 42\n"
+	if errorOutput.String() != want {
+		t.Fatalf("continuation = %q, want %q", errorOutput.String(), want)
+	}
+}
+
 func TestLogsHumanOutputRedactsAndHintsCursor(t *testing.T) {
 	server, _ := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, _ *http.Request) {
 		io.WriteString(writer, logsSnapshot)
