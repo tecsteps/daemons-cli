@@ -18,6 +18,8 @@ import (
 	"github.com/tecsteps/daemons-cli/internal/upload"
 )
 
+const emptyUploadFolder = `{"data":[],"meta":{"next_cursor":null}}`
+
 const meResponse = `{"data":{"account":{"id":"user-uuid","email":"developer@example.test","control_plane_api_enabled":true},"token":{"id":"token-uuid","name":"CLI","scopes":[],"restrictions":[],"expires_at":"2030-01-01T00:00:00Z"}},"meta":[]}`
 
 func normalizedHost(t *testing.T, raw string) string {
@@ -252,6 +254,11 @@ func TestUploadPartialResultFixtures(t *testing.T) {
 				io.WriteString(writer, daemonList)
 				return
 			}
+			if request.Method == http.MethodGet {
+				// The pre-upload overwrite check reads the upload folder.
+				io.WriteString(writer, emptyUploadFolder)
+				return
+			}
 			uploads++
 			if uploads == 2 {
 				problem(writer, 507, "daemon_storage_full", "The daemon is out of storage space for dr_cp_should_not_show.", `{}`)
@@ -287,6 +294,10 @@ func TestUploadPartialResultFixtures(t *testing.T) {
 		server, _ := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, request *http.Request) {
 			if request.URL.Path == "/api/v1/daemons" {
 				io.WriteString(writer, daemonList)
+				return
+			}
+			if request.Method == http.MethodGet {
+				io.WriteString(writer, emptyUploadFolder)
 				return
 			}
 			if uploads.Add(1) == 2 {

@@ -113,6 +113,38 @@ func TestRequiredResourceDiscriminatorFailsVisibly(t *testing.T) {
 	}
 }
 
+func TestInvalidJSONResponsesAreClassified(t *testing.T) {
+	tests := []struct {
+		name        string
+		statusCode  int
+		contentType string
+		body        string
+	}{
+		{name: "HTML error response", statusCode: http.StatusBadGateway, contentType: "text/html", body: "<html><body>Bad Gateway</body></html>"},
+		{name: "truncated success response", statusCode: http.StatusOK, contentType: "application/json", body: `{"data":`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.Header().Set("Content-Type", test.contentType)
+				writer.WriteHeader(test.statusCode)
+				io.WriteString(writer, test.body)
+			}))
+			defer server.Close()
+
+			api, err := New(server.URL, "dr_cp_test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = api.ShowServer(context.Background(), "server-uuid")
+			if errs.Code(err) != "invalid_response" || errs.ExitCode(err) != 1 {
+				t.Fatalf("error = %v, code = %q, exit = %d", err, errs.Code(err), errs.ExitCode(err))
+			}
+		})
+	}
+}
+
 type clientRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (roundTrip clientRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
