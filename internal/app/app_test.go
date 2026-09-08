@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +116,116 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 	}
 	if _, err := os.Stat(credentialPath); !os.IsNotExist(err) {
 		t.Fatalf("credential file still exists: %v", err)
+	}
+}
+
+func TestLoginDeviceFlowPolling(t *testing.T) {
+	tests := []struct {
+		name          string
+		pollResponses []string
+		expiresAt     string
+		wantExit      int
+		wantCode      string
+		wantIntervals []time.Duration
+	}{
+		{
+			name:          "pending continues polling",
+			pollResponses: []string{"pending", "approved"},
+			expiresAt:     "2030-01-01T00:00:00Z",
+			wantIntervals: []time.Duration{5 * time.Second, 5 * time.Second},
+		},
+		{
+			name:          "slow down grows the interval",
+			pollResponses: []string{"slow_down", "approved"},
+			expiresAt:     "2030-01-01T00:00:00Z",
+			wantIntervals: []time.Duration{5 * time.Second, 10 * time.Second},
+		},
+		{
+			name:          "authorization rejected exits with authentication failure",
+			pollResponses: []string{"authorization_rejected"},
+			expiresAt:     "2030-01-01T00:00:00Z",
+			wantExit:      3,
+			wantCode:      "authorization_rejected",
+			wantIntervals: []time.Duration{5 * time.Second},
+		},
+		{
+			name:          "authorization expired exits with authentication failure",
+			pollResponses: []string{"authorization_expired"},
+			expiresAt:     "2030-01-01T00:00:00Z",
+			wantExit:      3,
+			wantCode:      "authorization_expired",
+			wantIntervals: []time.Duration{5 * time.Second},
+		},
+		{
+			name:          "unknown status is invalid",
+			pollResponses: []string{"unknown"},
+			expiresAt:     "2030-01-01T00:00:00Z",
+			wantExit:      1,
+			wantCode:      "invalid_device_authorization",
+			wantIntervals: []time.Duration{5 * time.Second},
+		},
+		{
+			name:      "outer expiry exits with authentication failure",
+			expiresAt: "2029-01-01T00:00:00Z",
+			wantExit:  3,
+			wantCode:  "authorization_expired",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			polls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "application/json")
+				switch request.URL.Path {
+				case "/api/v1/device-authorizations":
+					writer.WriteHeader(http.StatusCreated)
+					fmt.Fprintf(writer, `{"data":{"device_code":"DEVICE-CODE","verification_url":"https://example.test/approve","expires_at":"%s","interval_seconds":5},"meta":[]}`, test.expiresAt)
+				case "/api/v1/device-authorizations/DEVICE-CODE":
+					response := test.pollResponses[polls]
+					polls++
+					switch response {
+					case "slow_down", "authorization_rejected", "authorization_expired":
+						problem(writer, http.StatusBadRequest, response, "Device authorization was not approved.", `{}`)
+					case "approved":
+						io.WriteString(writer, `{"data":{"status":"approved","access_token":"dr_cp_login_token","token_type":"Bearer"},"meta":[]}`)
+					default:
+						fmt.Fprintf(writer, `{"data":{"status":"%s"},"meta":[]}`, response)
+					}
+				case "/api/v1/me":
+					io.WriteString(writer, `{"data":{"account":{"id":"user-uuid","email":"developer@example.test","control_plane_api_enabled":true},"token":{"id":"token-uuid","name":"CLI","scopes":[],"restrictions":[],"expires_at":"2030-01-01T00:00:00Z"}},"meta":[]}`)
+				default:
+					http.NotFound(writer, request)
+				}
+			}))
+			defer server.Close()
+
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			intervals := []time.Duration{}
+			dependencies := Dependencies{
+				Output:      &output,
+				ErrorOutput: &errorOutput,
+				Environment: map[string]string{"HOME": t.TempDir()},
+				HTTPClient:  server.Client(),
+				Now:         func() time.Time { return time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC) },
+				Sleep: func(_ context.Context, interval time.Duration) error {
+					intervals = append(intervals, interval)
+					return nil
+				},
+				IsInteractive: func() bool { return false },
+			}
+			code := Run(context.Background(), []string{"--host", server.URL, "login"}, dependencies)
+			if code != test.wantExit {
+				t.Fatalf("exit = %d, want %d; stdout = %q; stderr = %q", code, test.wantExit, output.String(), errorOutput.String())
+			}
+			if !slices.Equal(intervals, test.wantIntervals) {
+				t.Fatalf("intervals = %v, want %v", intervals, test.wantIntervals)
+			}
+			if test.wantCode != "" && !strings.Contains(errorOutput.String(), test.wantCode) {
+				t.Fatalf("stderr = %q, want code %q", errorOutput.String(), test.wantCode)
+			}
+		})
 	}
 }
 
