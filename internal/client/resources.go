@@ -614,7 +614,7 @@ func (c *Client) Upload(ctx context.Context, daemonID, filename string, file *os
 	v2 := c.accessV2
 	c.preflightMu.Unlock()
 	if v2 {
-		return c.uploadAccess(ctx, daemonID, filename, file)
+		return c.uploadAccess(ctx, daemonID, newAccessOperationID(), DefaultWorkspacePaths(), filename, file)
 	}
 	return c.upload(ctx, daemonID, filename, file)
 }

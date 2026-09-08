@@ -16,18 +16,56 @@ import (
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
+// UploadRecoverable reports whether this Control Plane serves uploads through
+// workspace access, where an operation identity makes an ambiguous outcome
+// resolvable by receipt. Callers stage an identity only when it is true.
+func (c *Client) UploadRecoverable(ctx context.Context) (bool, error) {
+	if err := c.Preflight(ctx); err != nil {
+		return false, err
+	}
+	c.preflightMu.Lock()
+	defer c.preflightMu.Unlock()
+	return c.accessV2, nil
+}
+
+// NewUploadOperationID mints the operation identity a caller must persist
+// before an upload, so an ambiguous outcome stays resolvable by receipt.
+func NewUploadOperationID() string { return newAccessOperationID() }
+
+// UploadOperation streams one file under a caller-supplied operation identity.
+// The identity is deliberately an input: the caller records it locally before
+// the request so an interrupted transfer can be resolved without replaying it.
+func (c *Client) UploadOperation(ctx context.Context, daemonID, operationID string, paths WorkspacePaths, filename string, file *os.File) (UploadResponse, error) {
+	if !payloadUUID.MatchString(operationID) {
+		return UploadResponse{}, errs.New("usage_error", "An upload operation UUID is required.", 2)
+	}
+	if err := c.Preflight(ctx); err != nil {
+		return UploadResponse{}, err
+	}
+	c.preflightMu.Lock()
+	v2 := c.accessV2
+	c.preflightMu.Unlock()
+	if !v2 {
+		// A v1 Control Plane has no receipt to resolve, so the operation
+		// identity is not recorded and the legacy upload runs unchanged.
+		return c.upload(ctx, daemonID, filename, file)
+	}
+	return c.uploadAccess(ctx, daemonID, operationID, paths, filename, file)
+}
+
 // uploadAccess streams the selector prelude and file without a central multipart
 // request or a replayable request body. An ambiguous result is never retried.
-func (c *Client) uploadAccess(ctx context.Context, daemonID, filename string, file *os.File) (UploadResponse, error) {
+func (c *Client) uploadAccess(ctx context.Context, daemonID, operationID string, paths WorkspacePaths, filename string, file *os.File) (UploadResponse, error) {
 	var result UploadResponse
-	if filename == "" || filename == "." || filename == ".." || strings.ContainsAny(filename, "/\\\x00\r\n") {
-		return result, errs.New("unsafe_workspace_path", "The upload filename is invalid.", 2)
+	selectorPath, err := paths.UploadSelector(filename)
+	if err != nil {
+		return result, err
 	}
 	stat, err := file.Stat()
 	if err != nil || !stat.Mode().IsRegular() || stat.Size() > 1<<30 {
 		return result, errs.New("upload_limit", "Upload requires a regular file no larger than 1 GiB.", 2)
 	}
-	selector, err := json.Marshal(map[string]string{"path": "uploads/" + filename})
+	selector, err := json.Marshal(map[string]string{"path": selectorPath})
 	if err != nil || len(selector) > 16384 {
 		return result, errs.New("upload_limit", "The upload selector is too large.", 2)
 	}
@@ -35,7 +73,6 @@ func (c *Client) uploadAccess(ctx context.Context, daemonID, filename string, fi
 	binary.BigEndian.PutUint32(prelude, uint32(len(selector)))
 	copy(prelude[4:], selector)
 	output := boundedContentJSON{maximum: 32768}
-	operationID := newAccessOperationID()
 	if err := c.AccessContent(ctx, daemonID, operationID, "files.upload", io.MultiReader(bytes.NewReader(prelude), file), &output); err != nil {
 		return result, uploadOutcomeError(operationID, err)
 	}
@@ -88,6 +125,11 @@ func newAccessOperationID() string {
 	value[8] = (value[8] & 63) | 128
 	return fmt.Sprintf("%x-%x-%x-%x-%x", value[:4], value[4:6], value[6:8], value[8:10], value[10:])
 }
+
+// ExitRevisionConflict marks an expected-revision mismatch. It is deliberately
+// distinct from denial (5) and from an unknown outcome (8): the request was
+// understood and refused because the workspace moved on.
+const ExitRevisionConflict = 9
 
 type AccessTicket struct {
 	Data struct {
@@ -234,6 +276,12 @@ func (c *Client) relayContentType(ctx context.Context, method, gateway, ticket, 
 		return errs.New("relay_outcome_unknown", "The content transfer was interrupted. Obtain a fresh receipt ticket before retrying a write.", 8)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusConflict {
+		// The guest reports revision_conflict, payload_conflict and
+		// stale_generation as 409. The caller must re-read the current revision
+		// and decide; the CLI never resolves a conflict by retrying.
+		return errs.New("revision_conflict", "The workspace changed since the expected revision. Re-read the current state before retrying.", ExitRevisionConflict)
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		// Upstream errors may contain content. Never decode or print that body.
 		return errs.New("relay_refused", "The gateway refused the content transfer.", 5)
