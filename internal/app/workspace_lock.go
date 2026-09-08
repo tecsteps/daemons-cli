@@ -11,6 +11,7 @@ import (
 	"github.com/tecsteps/daemons-cli/internal/client"
 	"github.com/tecsteps/daemons-cli/internal/credentials"
 	"github.com/tecsteps/daemons-cli/internal/errs"
+	"github.com/tecsteps/daemons-cli/internal/terminal"
 )
 
 // The workspace lock commands. Every secret is read from a hidden interactive
@@ -129,6 +130,36 @@ func newLockContext(ctx context.Context, daemonArgument string, options globalOp
 	}
 	return lockContext{api: api, baseURL: baseURL, store: store, daemonID: daemon.ID,
 		daemonName: daemon.Name, dependencies: dependencies, options: options}, nil
+}
+
+// lockResponder builds the working-transport proof callback for one already
+// resolved workspace. It returns nil when this device holds no live grant, so
+// an open workspace attaches exactly as before and a protected one refuses with
+// the lock code instead of a silent denial. The grant is re-read per challenge:
+// a session that outlives the eight-hour deadline stops proving by itself.
+func lockResponder(daemonID, action, resourceUUID string, options globalOptions, dependencies Dependencies) (terminal.LockResponder, error) {
+	store, err := workspaceLockStore(options, dependencies.Environment)
+	if err != nil {
+		return nil, err
+	}
+	_, baseURL, _, err := authenticatedClient(options, dependencies)
+	if err != nil {
+		return nil, err
+	}
+	context := lockContext{baseURL: baseURL, store: store, daemonID: daemonID, dependencies: dependencies, options: options}
+	if _, live, err := context.authority(); err != nil || !live {
+		return nil, err
+	}
+	return func(envelope string) (string, error) {
+		current, stillLive, err := context.authority()
+		if err != nil {
+			return "", err
+		}
+		if !stillLive {
+			return "", errs.New("lock_session_expired", "The device session expired. Unlock again.", 5)
+		}
+		return current.RespondToLockDeviceChallenge(envelope, action, resourceUUID, context.nowMs())
+	}, nil
 }
 
 func workspaceLockStore(options globalOptions, environment map[string]string) (credentials.LockStore, error) {
@@ -405,23 +436,33 @@ func relockWorkspace(ctx context.Context, daemonArgument string, options globalO
 	if err != nil {
 		return err
 	}
-	// The local grant goes first and unconditionally: whatever the guest
-	// answers, this device must not keep an authority it just asked to end.
-	if err := lock.store.Revoke(lock.baseURL, lock.daemonID); err != nil {
-		return lockStoreError(err)
-	}
 	if !live {
+		if err := lock.store.Revoke(lock.baseURL, lock.daemonID); err != nil {
+			return lockStoreError(err)
+		}
 		return errs.New("lock_session_expired",
 			"This device holds no live workspace grant. Nothing to relock locally; run daemons unlock first if you meant to relock the guest.", 5)
 	}
-	_, _, err = lock.exchange(ctx, "lock.lock", client.NewLockOperationID(), authority.Device, false,
+	_, _, exchangeErr := lock.exchange(ctx, "lock.lock", client.NewLockOperationID(), authority.Device, false,
 		func(challenge client.LockChallenge) (map[string]any, error) {
 			return client.LockStatusBody(authority.Device, authority.SessionUUID, challenge)
 		})
-	if err != nil {
+	// A Control Plane that does not admit lock.lock never carried the request to
+	// the guest, so nothing was asked to end and the device keeps the grant it
+	// already holds. Every other outcome, including an uncertain one, gives the
+	// local grant up: this device must not keep an authority it asked to end.
+	if errs.Code(exchangeErr) == "lock_protocol_unsupported" {
+		fmt.Fprintln(dependencies.ErrorOutput,
+			"The workspace guest was not relocked and this device keeps its grant.")
+		return exchangeErr
+	}
+	if err := lock.store.Revoke(lock.baseURL, lock.daemonID); err != nil {
+		return lockStoreError(err)
+	}
+	if exchangeErr != nil {
 		fmt.Fprintln(dependencies.ErrorOutput,
 			"The local device session was removed. The workspace guest was not relocked.")
-		return err
+		return exchangeErr
 	}
 	if options.JSON {
 		writeJSON(dependencies.Output, map[string]any{

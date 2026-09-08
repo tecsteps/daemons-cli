@@ -53,6 +53,11 @@ func attach(ctx context.Context, arguments []string, options globalOptions, depe
 		return err
 	}
 
+	lock, err := lockResponder(daemon.ID, "terminal.connect", daemon.ID, options, dependencies)
+	if err != nil {
+		return err
+	}
+
 	signals, stopSignals := terminal.WatchSignals()
 	defer stopSignals()
 	resizes, stopResizes := terminal.WatchResize(dependencies.Stdout)
@@ -72,12 +77,16 @@ func attach(ctx context.Context, arguments []string, options globalOptions, depe
 		Output:  dependencies.Output,
 		Resize:  resizes,
 		Signals: signals,
+		Lock:    lock,
 	})
 	if restoreErr := restore(); restoreErr != nil {
 		return errs.New("terminal_restore_failed", sanitizeText(restoreErr.Error()), 1)
 	}
 	if attachErr != nil {
 		return attachErr
+	}
+	if outcome.LockError != nil {
+		return outcome.LockError
 	}
 	if outcome.Detached {
 		fmt.Fprintf(dependencies.Output, "\nDetached from %s/%s. The remote session is still running.\n", daemon.Name, session)

@@ -183,7 +183,8 @@ func sanitizeText(value string) string {
 
 func sensitiveField(key string) bool {
 	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
-	for _, fragment := range []string{"access_token", "refresh_token", "authorization", "credential", "password", "secret", "ticket"} {
+	for _, fragment := range []string{"access_token", "refresh_token", "authorization", "credential", "password", "secret", "ticket",
+		"recovery_phrase", "device_scalar", "identity_pin"} {
 		if strings.Contains(normalized, fragment) {
 			return true
 		}

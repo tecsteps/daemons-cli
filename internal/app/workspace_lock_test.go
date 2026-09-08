@@ -594,10 +594,14 @@ func TestWorkspaceLockUnsupportedActionsFailClosed(t *testing.T) {
 	if !strings.Contains(harness.errorOutput.String(), "lock_protocol_unsupported") {
 		t.Fatalf("unexpected error: %s", harness.errorOutput.String())
 	}
-	// The local grant is dropped regardless: this device asked to give up its
-	// authority and must not keep it because the guest could not be reached.
-	if strings.Contains(harness.storeBytes(t), "device_scalar") {
-		t.Fatal("a relock left the local device grant in place")
+	// The request never reached the guest, so nothing was asked to end and the
+	// device keeps the grant it still holds. A relock that does reach the guest
+	// still gives the local grant up.
+	if !strings.Contains(harness.storeBytes(t), "device_scalar") {
+		t.Fatal("an unadmitted relock discarded a grant the guest never saw")
+	}
+	if !strings.Contains(harness.errorOutput.String(), "keeps its grant") {
+		t.Fatalf("the retained grant was not reported: %s", harness.errorOutput.String())
 	}
 
 	harness.guest.admittedActions["lock.setup"] = true

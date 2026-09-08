@@ -182,6 +182,10 @@ A grant lasts eight hours from verification with no sliding refresh, and it neve
 
 `lock status` reports what this device knows. Guest state is shown as `unknown` unless the guest itself reported it: it is never inferred from Control Plane metadata.
 
+What the grant currently reaches: `daemons attach` answers the guest's device challenge with the stored grant, and refuses with `lock_device_required` (exit 5) when this device has none. Files, uploads and SSH still send only a Control Plane ticket, so on a protected workspace they stay denied by the guest until that wiring lands. Use `daemons unlock` on this device before the terminal, and expect the other access kinds to be refused rather than to fall back.
+
+`daemons lock DAEMON` gives up this device's grant. When the Control Plane does not admit the guest-wide lock action yet, the request never reaches the guest, so the grant is kept and the refusal says so; every other outcome, including an uncertain one, drops the local grant.
+
 ### Terminal attach
 
 `daemons attach DAEMON [--session NAME]` requires the ticket to advertise the `takeover_v1` terminal feature; if the Control Plane does not, attach refuses (exit 2) before connecting instead of guessing at the gateway's behaviour. Raw terminal mode is restored on every exit path, including a panic.
