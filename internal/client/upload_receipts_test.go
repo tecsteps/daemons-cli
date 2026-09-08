@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tecsteps/daemons-cli/internal/errs"
@@ -74,7 +75,10 @@ func TestUploadReceiptUsesFreshFileReadTicketWithoutUpload(t *testing.T) {
 
 func TestInterruptedUploadReportsItsOperationWithoutReplay(t *testing.T) {
 	operation, uploads := "", 0
+	var mutex sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mutex.Lock()
+		defer mutex.Unlock()
 		w.Header().Set("X-Daemons-Api-Version", "v1")
 		if r.URL.Path == "/api/v1" {
 			io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
@@ -111,6 +115,8 @@ func TestInterruptedUploadReportsItsOperationWithoutReplay(t *testing.T) {
 	file.Seek(0, 0)
 	c, _ := New(server.URL, "test-token")
 	_, err = c.uploadAccess(context.Background(), "workspace", "file.txt", file)
+	mutex.Lock()
+	defer mutex.Unlock()
 	if err == nil || errs.ExitCode(err) != 8 || !payloadUUID.MatchString(operation) ||
 		!strings.Contains(err.Error(), "daemons files receipt DAEMON "+operation) || strings.Contains(err.Error(), "private-file-content") || uploads != 1 {
 		t.Fatalf("missing recovery identity or replayed upload: count=%d error=%v", uploads, err)
