@@ -85,7 +85,7 @@ func TestV2CommandsKeepSelectorsAndUploadOutOfControlPlane(t *testing.T) {
 			if data.String() != "private-file-content" {
 				t.Error("file bytes changed")
 			}
-			io.WriteString(w, `{"ok":true,"path":"/root/workspace/uploads/synthetic.txt"}`)
+			io.WriteString(w, `{"status":"applied","path":"/root/workspace/uploads/synthetic.txt","bytes":20,"sha256":"`+strings.Repeat("a", 64)+`"}`)
 			return
 		}
 		var selector map[string]any

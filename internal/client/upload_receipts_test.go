@@ -32,6 +32,18 @@ func TestUploadReceiptRejectsAmbiguousOrPrivateResponses(t *testing.T) {
 	}
 }
 
+func TestUploadAcknowledgementRequiresDurableAbsoluteReceipt(t *testing.T) {
+	valid := `{"status":"applied","path":"/workspace/uploads/file","bytes":0,"sha256":"` + strings.Repeat("a", 64) + `"}`
+	if receipt, err := decodeUploadReceiptPath([]byte(valid), true); err != nil || receipt.Status != "applied" {
+		t.Fatal("valid acknowledgement rejected")
+	}
+	for _, raw := range []string{`{}`, `{"ok":true,"path":"/workspace/file"}`, strings.Replace(valid, "/workspace/uploads/file", "workspace/uploads/file", 1), strings.Replace(valid, "/workspace/uploads/file", "//workspace/file", 1)} {
+		if _, err := decodeUploadReceiptPath([]byte(raw), true); err == nil {
+			t.Fatal("invalid acknowledgement accepted")
+		}
+	}
+}
+
 func TestUploadReceiptUsesFreshFileReadTicketWithoutUpload(t *testing.T) {
 	const workspace = "11111111-1111-4111-8111-111111111111"
 	const operation = "22222222-2222-4222-8222-222222222222"

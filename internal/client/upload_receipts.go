@@ -33,6 +33,10 @@ func (c *Client) GetUploadReceipt(ctx context.Context, daemonID, operationID str
 }
 
 func decodeUploadReceipt(raw []byte) (UploadReceipt, error) {
+	return decodeUploadReceiptPath(raw, false)
+}
+
+func decodeUploadReceiptPath(raw []byte, absolute bool) (UploadReceipt, error) {
 	bad := func() (UploadReceipt, error) { return UploadReceipt{}, invalidResponse("upload receipt") }
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	opening, err := decoder.Token()
@@ -72,7 +76,14 @@ func decodeUploadReceipt(raw []byte) (UploadReceipt, error) {
 			len(receipt.Path) == 0 || len(receipt.Path) > 16384 || strings.ContainsRune(receipt.Path, '\x00') {
 			return bad()
 		}
-		for _, part := range strings.Split(receipt.Path, "/") {
+		workspacePath := receipt.Path
+		if absolute {
+			if !strings.HasPrefix(workspacePath, "/") {
+				return bad()
+			}
+			workspacePath = strings.TrimPrefix(workspacePath, "/")
+		}
+		for _, part := range strings.Split(workspacePath, "/") {
 			if part == "" || part == "." || part == ".." {
 				return bad()
 			}

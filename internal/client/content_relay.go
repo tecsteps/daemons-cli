@@ -34,15 +34,16 @@ func (c *Client) uploadAccess(ctx context.Context, daemonID, filename string, fi
 	prelude := make([]byte, 4+len(selector))
 	binary.BigEndian.PutUint32(prelude, uint32(len(selector)))
 	copy(prelude[4:], selector)
-	var output boundedContentJSON
+	output := boundedContentJSON{maximum: 32768}
 	operationID := newAccessOperationID()
 	if err := c.AccessContent(ctx, daemonID, operationID, "files.upload", io.MultiReader(bytes.NewReader(prelude), file), &output); err != nil {
 		return result, uploadOutcomeError(operationID, err)
 	}
-	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+	receipt, err := decodeUploadReceiptPath(output.Bytes(), true)
+	if err != nil || receipt.Status != "applied" || receipt.Bytes != stat.Size() {
 		return result, uploadOutcomeError(operationID, invalidMutationResponse("upload receipt"))
 	}
-	return result, nil
+	return UploadResponse{OK: true, Path: receipt.Path}, nil
 }
 
 func uploadOutcomeError(operationID string, err error) error {
