@@ -62,6 +62,7 @@ var commandRegistry = map[string]commandHandler{
 	"task list":           errorHandler(listTasks),
 	"files list":          errorHandler(listFiles),
 	"files download":      errorHandler(downloadFile),
+	"files receipt":       uploadReceipt,
 	"logs":                errorHandler(showLogs),
 	"ssh":                 ssh,
 	"ssh-config":          errorHandler(sshConfig),

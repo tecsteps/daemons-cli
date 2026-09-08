@@ -35,6 +35,8 @@ func TestUploadReceiptUsesFreshFileReadTicketWithoutUpload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Daemons-Api-Version", "v1")
 		switch r.URL.Path {
+		case "/api/v1":
+			io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
 		case "/api/v1/daemons/" + workspace + "/access-tickets":
 			mints++
 			var body map[string]string

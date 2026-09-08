@@ -38,6 +38,7 @@ Commands:
   upload DAEMON PATH...
   payload put DAEMON OPERATION FILE
   payload receipt DAEMON OPERATION
+  files receipt DAEMON OPERATION
   task run DAEMON (PROMPT | -) [--agent AGENT] [--model MODEL] [--permission-mode MODE]
   task show DAEMON TASK
   task cancel DAEMON TASK
