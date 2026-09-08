@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -18,8 +20,7 @@ const (
 	maximumListPages = 50
 )
 
-// listFiles reads a workspace directory inventory. It never fetches file
-// content: the canonical read and download routes are not available yet.
+// listFiles reads a workspace directory inventory without fetching file content.
 func listFiles(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) error {
 	if helpRequested(arguments) {
 		fmt.Fprintln(dependencies.Output, filesListUsage)
@@ -143,6 +144,61 @@ func normalizeWorkspacePath(value string) (string, error) {
 		return "", errs.New("unsafe_workspace_path", "PATH must be a plain relative workspace path without . or .. segments.", 2)
 	}
 	return value, nil
+}
+
+func downloadFile(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) error {
+	const usage = "Usage: daemons files download DAEMON PATH DESTINATION"
+	if helpRequested(arguments) {
+		fmt.Fprintln(dependencies.Output, usage)
+		return nil
+	}
+	if len(arguments) != 3 || arguments[0] == "" || arguments[2] == "" || arguments[2] == "-" {
+		return errs.New("usage_error", usage, 2)
+	}
+	workspacePath, err := normalizeWorkspacePath(arguments[1])
+	if err != nil {
+		return err
+	}
+	if workspacePath == "" {
+		return errs.New("usage_error", "PATH must name a workspace file.", 2)
+	}
+	destination := arguments[2]
+	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+		return errs.New("download_destination", "The destination must be a new file in an existing directory.", 2)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".daemons-download-*")
+	if err != nil {
+		return errs.New("download_destination", "Cannot create a private download file in the destination directory.", 2)
+	}
+	defer os.Remove(temporary.Name())
+	defer temporary.Close()
+	api, _, _, err := authenticatedClient(options, dependencies)
+	if err != nil {
+		return err
+	}
+	daemonID, err := resolveDaemonID(ctx, api, arguments[0])
+	if err != nil {
+		return err
+	}
+	if err := api.DownloadFile(ctx, daemonID, workspacePath, temporary); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return errs.New("download_destination", "The downloaded file could not be saved.", 8)
+	}
+	if err := temporary.Close(); err != nil {
+		return errs.New("download_destination", "The downloaded file could not be saved.", 8)
+	}
+	// A hard link publishes the complete file atomically without replacing a concurrent writer.
+	if err := os.Link(temporary.Name(), destination); err != nil {
+		return errs.New("download_destination", "The destination could not be created. Existing files were preserved.", 8)
+	}
+	if options.JSON {
+		writeJSON(dependencies.Output, map[string]any{"data": map[string]string{"path": destination}, "meta": map[string]any{}})
+	} else if !options.Quiet {
+		fmt.Fprintln(dependencies.Output, sanitizeText(destination))
+	}
+	return nil
 }
 
 // safeRelativeWorkspacePath mirrors the server's rule so an obviously bad

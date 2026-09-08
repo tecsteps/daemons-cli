@@ -36,11 +36,15 @@ Commands:
   operations show ID
   attach DAEMON [--session NAME]
   upload DAEMON PATH...
+  payload put DAEMON OPERATION FILE
+  payload receipt DAEMON OPERATION
+  files receipt DAEMON OPERATION
   task run DAEMON (PROMPT | -) [--agent AGENT] [--model MODEL] [--permission-mode MODE]
   task show DAEMON TASK
   task cancel DAEMON TASK
   task list DAEMON [--limit N]
   files list DAEMON [PATH] [--cursor CURSOR] [--limit N] [--all]
+  files download DAEMON PATH DESTINATION
   logs DAEMON --source agent|app|daemon|provisioning [--level LEVEL] [--cursor CURSOR] [--limit N]
   ssh enable|disable|keys ...
   ssh-config DAEMON [--identity PATH] [--remove]

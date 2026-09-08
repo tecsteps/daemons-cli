@@ -54,7 +54,7 @@ func TestPhaseThreeCommandsPreserveCanonicalJSON(t *testing.T) {
 			name:      "task show",
 			arguments: []string{"task", "show", "research", "task-uuid"},
 			responses: map[string]string{"GET /api/v1/daemons": daemonList, "GET /api/v1/daemons/daemon-uuid/tasks/task-uuid": taskSucceeded},
-			want:      []string{"GET /api/v1/daemons", "GET /api/v1/daemons/daemon-uuid/tasks/task-uuid"},
+			want:      []string{"GET /api/v1/daemons", "GET /api/v1", "GET /api/v1/daemons/daemon-uuid/tasks/task-uuid"},
 		},
 		{
 			name:      "task cancel",
@@ -67,7 +67,7 @@ func TestPhaseThreeCommandsPreserveCanonicalJSON(t *testing.T) {
 			name:      "task list",
 			arguments: []string{"task", "list", "11111111-2222-3333-4444-555555555555", "--limit", "5"},
 			responses: map[string]string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/tasks?limit=5": `{"data":[{"id":"task-uuid","status":"queued","agent":"codex"}],"meta":{"next_cursor":null}}`},
-			want:      []string{"GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/tasks?limit=5"},
+			want:      []string{"GET /api/v1", "GET /api/v1/daemons/11111111-2222-3333-4444-555555555555/tasks?limit=5"},
 		},
 		{
 			name:      "files list with path cursor and limit",
@@ -380,6 +380,25 @@ func TestFilesListHumanOutputAndFailures(t *testing.T) {
 				t.Fatalf("exit = %d, stderr = %q", code, errorOutput.String())
 			}
 		})
+	}
+}
+
+func TestLogsContinuationHintPreservesLevelAndLimit(t *testing.T) {
+	server, _ := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("level") != "error" || request.URL.Query().Get("limit") != "1" {
+			t.Errorf("log selector was not preserved")
+		}
+		io.WriteString(writer, logsSnapshot)
+	})
+	var output, errorOutput bytes.Buffer
+	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
+	code := Run(context.Background(), []string{"--host", server.URL, "logs", "11111111-2222-3333-4444-555555555555", "--source", "app", "--level", "error", "--limit", "1"}, dependencies)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errorOutput.String())
+	}
+	want := "Next: daemons logs 11111111-2222-3333-4444-555555555555 --source app --level error --limit 1 --cursor 42\n"
+	if errorOutput.String() != want {
+		t.Fatalf("continuation = %q, want %q", errorOutput.String(), want)
 	}
 }
 

@@ -1,0 +1,136 @@
+package client
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/tecsteps/daemons-cli/internal/errs"
+)
+
+func TestUploadReceiptRejectsAmbiguousOrPrivateResponses(t *testing.T) {
+	valid := `{"status":"applied","path":"uploads/file","bytes":0,"sha256":"` + strings.Repeat("a", 64) + `"}`
+	for _, raw := range []string{valid, `{"status":"not_found"}`, `{"status":"outcome_unknown"}`} {
+		if _, err := decodeUploadReceipt([]byte(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, raw := range []string{`null`, `{}`, `{"status":"applied"}`, `{"status":"not_found","path":"private"}`,
+		`{"status":"not_found","status":"not_found"}`, valid + `{}`, strings.Replace(valid, `"bytes":0`, `"bytes":null`, 1),
+		strings.Replace(valid, `"bytes":0`, `"bytes":1073741825`, 1), strings.Replace(valid, "uploads/file", "../private", 1),
+		strings.Replace(valid, "uploads/file", "/private", 1), strings.Replace(valid, "uploads/file", "a//b", 1),
+		strings.Replace(valid, `"status":"applied"`, `"status":"unknown"`, 1)} {
+		if _, err := decodeUploadReceipt([]byte(raw)); err == nil || strings.Contains(err.Error(), "private") {
+			t.Fatalf("accepted or disclosed receipt: %v", err)
+		}
+	}
+}
+
+func TestUploadAcknowledgementRequiresDurableAbsoluteReceipt(t *testing.T) {
+	valid := `{"status":"applied","path":"/workspace/uploads/file","bytes":0,"sha256":"` + strings.Repeat("a", 64) + `"}`
+	if receipt, err := decodeUploadReceiptPath([]byte(valid), true); err != nil || receipt.Status != "applied" {
+		t.Fatal("valid acknowledgement rejected")
+	}
+	for _, raw := range []string{`{}`, `{"ok":true,"path":"/workspace/file"}`, strings.Replace(valid, "/workspace/uploads/file", "workspace/uploads/file", 1), strings.Replace(valid, "/workspace/uploads/file", "//workspace/file", 1)} {
+		if _, err := decodeUploadReceiptPath([]byte(raw), true); err == nil {
+			t.Fatal("invalid acknowledgement accepted")
+		}
+	}
+}
+
+func TestUploadReceiptUsesFreshFileReadTicketWithoutUpload(t *testing.T) {
+	const workspace = "11111111-1111-4111-8111-111111111111"
+	const operation = "22222222-2222-4222-8222-222222222222"
+	mints, queries := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Daemons-Api-Version", "v1")
+		switch r.URL.Path {
+		case "/api/v1":
+			io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
+		case "/api/v1/daemons/" + workspace + "/access-tickets":
+			mints++
+			var body map[string]string
+			if json.NewDecoder(r.Body).Decode(&body) != nil || len(body) != 2 || body["action"] != "files.read" || body["operation_uuid"] != operation {
+				t.Error("invalid ticket metadata")
+			}
+			io.WriteString(w, `{"data":{"ticket":"opaque.ticket","ticket_version":2,"expires_in":30,"method":"POST","gateway_path":"/v1/workspaces/`+workspace+`/files/query"}}`)
+		case "/v1/workspaces/" + workspace + "/files/query":
+			queries++
+			body, _ := io.ReadAll(r.Body)
+			if r.Method != "POST" || string(body) != `{"operation":"upload_receipt"}` || r.Header.Get("Authorization") != "DaemonsTicket opaque.ticket" {
+				t.Error("invalid guest receipt query")
+			}
+			io.WriteString(w, `{"status":"outcome_unknown"}`)
+		default:
+			t.Error("unexpected endpoint")
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	c, _ := New(server.URL, "test-token")
+	for i := 0; i < 2; i++ {
+		receipt, err := c.GetUploadReceipt(context.Background(), workspace, operation)
+		if err != nil || receipt.Status != "outcome_unknown" {
+			t.Fatalf("receipt: %+v %v", receipt, err)
+		}
+	}
+	if mints != 2 || queries != 2 {
+		t.Fatal("receipt lookup reused authority or replayed upload")
+	}
+}
+
+func TestInterruptedUploadReportsItsOperationWithoutReplay(t *testing.T) {
+	operation, uploads := "", 0
+	var mutex sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		w.Header().Set("X-Daemons-Api-Version", "v1")
+		if r.URL.Path == "/api/v1" {
+			io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/access-tickets") {
+			var metadata map[string]string
+			if json.NewDecoder(r.Body).Decode(&metadata) != nil {
+				t.Error("invalid metadata")
+			}
+			operation = metadata["operation_uuid"]
+			io.WriteString(w, `{"data":{"ticket":"opaque.ticket","ticket_version":2,"expires_in":30,"method":"PUT","gateway_path":"/v1/workspaces/workspace/files/uploads/`+operation+`"}}`)
+			return
+		}
+		if r.Method != "PUT" || !strings.HasSuffix(r.URL.Path, "/files/uploads/"+operation) {
+			t.Error("unexpected endpoint")
+		}
+		uploads++
+		io.Copy(io.Discard, r.Body)
+		connection, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		connection.Close()
+	}))
+	defer server.Close()
+	file, err := os.CreateTemp(t.TempDir(), "upload-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	file.WriteString("private-file-content")
+	file.Seek(0, 0)
+	c, _ := New(server.URL, "test-token")
+	_, err = c.uploadAccess(context.Background(), "workspace", "file.txt", file)
+	mutex.Lock()
+	defer mutex.Unlock()
+	if err == nil || errs.ExitCode(err) != 8 || !payloadUUID.MatchString(operation) ||
+		!strings.Contains(err.Error(), "daemons files receipt DAEMON "+operation) || strings.Contains(err.Error(), "private-file-content") || uploads != 1 {
+		t.Fatalf("missing recovery identity or replayed upload: count=%d error=%v", uploads, err)
+	}
+}
