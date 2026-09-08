@@ -98,7 +98,14 @@ func showLogs(ctx context.Context, arguments []string, options globalOptions, de
 		fmt.Fprintf(dependencies.Output, "%s %s %s\n", timestamp, strings.ToUpper(line.Level), sanitizeText(line.Message))
 	}
 	if next := result.Meta.NextCursor; next != nil && *next != "" && !options.Quiet {
-		fmt.Fprintf(dependencies.ErrorOutput, "Next: daemons logs %s --source %s --cursor %s\n", positionals[0], source, *next)
+		hint := fmt.Sprintf("Next: daemons logs %s --source %s", positionals[0], source)
+		if level != "" {
+			hint += " --level " + level
+		}
+		if limit != 0 {
+			hint += fmt.Sprintf(" --limit %d", limit)
+		}
+		fmt.Fprintf(dependencies.ErrorOutput, "%s --cursor %s\n", hint, *next)
 	}
 	return nil
 }

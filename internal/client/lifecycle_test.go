@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tecsteps/daemons-cli/internal/errs"
@@ -47,9 +48,9 @@ func TestE7BulkRejectsMissingOrForeignOutcomes(t *testing.T) {
 }
 
 func TestE7MutationTransportRetriesPreserveExactKeyAndBody(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
 	api := phaseTwoServer(t, func(w http.ResponseWriter, r *http.Request) {
-		calls++
+		calls.Add(1)
 		body, _ := io.ReadAll(r.Body)
 		if r.Header.Get("Idempotency-Key") != "exact-key-1" || r.Header.Get("If-Match") != `"revision"` || string(body) != `{"force":true}` {
 			t.Errorf("replay changed request: %v %s", r.Header, body)
@@ -62,7 +63,7 @@ func TestE7MutationTransportRetriesPreserveExactKeyAndBody(t *testing.T) {
 		connection.Close()
 	})
 	_, err := api.LifecycleDaemonWithOptions(context.Background(), "workspace", "restart", `"revision"`, "exact-key-1", map[string]any{"force": true})
-	if errs.ExitCode(err) != 8 || calls < 1 || calls > 2 {
-		t.Fatalf("calls %d error %v", calls, err)
+	if count := calls.Load(); errs.ExitCode(err) != 8 || count < 1 || count > 2 {
+		t.Fatalf("calls %d error %v", count, err)
 	}
 }

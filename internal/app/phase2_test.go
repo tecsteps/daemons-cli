@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -21,6 +22,7 @@ const (
 )
 
 type phaseTwoServer struct {
+	mu       sync.Mutex
 	requests []string
 	headers  []http.Header
 	bodies   []map[string]any
@@ -30,11 +32,13 @@ func newPhaseTwoServer(t *testing.T, handler func(record *phaseTwoServer, writer
 	t.Helper()
 	record := &phaseTwoServer{}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		record.mu.Lock()
 		record.requests = append(record.requests, request.Method+" "+request.URL.RequestURI())
 		record.headers = append(record.headers, request.Header.Clone())
 		var body map[string]any
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		record.bodies = append(record.bodies, body)
+		record.mu.Unlock()
 		writer.Header().Set("Content-Type", "application/json")
 		writer.Header().Set("X-Daemons-Api-Version", "v1")
 		if request.URL.Path == "/api/v1" {
@@ -473,6 +477,8 @@ func TestSpawnTransportFailureAfterDispatchIsOutcomeUnknown(t *testing.T) {
 	var output, errorOutput bytes.Buffer
 	dependencies := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
 	code := Run(context.Background(), []string{"--host", server.URL, "spawn", "research", "--size", "small", "--variant", "burstable", "--agent", "codex", "--assigned-user", lifecycleWorkspace, "--creation-team", lifecycleOther, "--idempotency-key", "phase2-spawn-key"}, dependencies)
+	record.mu.Lock()
+	defer record.mu.Unlock()
 	// Go's transport may replay a request carrying Idempotency-Key once when a
 	// reused connection dies before any response; that replay must carry the
 	// identical key, and the CLI itself never submits under a new one.

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -282,14 +283,13 @@ func TestUploadPartialResultFixtures(t *testing.T) {
 	})
 
 	t.Run("transport failure after dispatch marks that file unknown and exits 8", func(t *testing.T) {
-		uploads := 0
+		var uploads atomic.Int32
 		server, _ := newPhaseTwoServer(t, func(_ *phaseTwoServer, writer http.ResponseWriter, request *http.Request) {
 			if request.URL.Path == "/api/v1/daemons" {
 				io.WriteString(writer, daemonList)
 				return
 			}
-			uploads++
-			if uploads == 2 {
+			if uploads.Add(1) == 2 {
 				hijacker, ok := writer.(http.Hijacker)
 				if !ok {
 					t.Fatal("hijack unsupported")
@@ -322,8 +322,8 @@ func TestUploadPartialResultFixtures(t *testing.T) {
 			t.Fatalf("report error = %+v", report.Error)
 		}
 		// The third file was never sent: no automatic retry, no continuation.
-		if uploads != 2 {
-			t.Fatalf("uploads = %d, want 2", uploads)
+		if count := uploads.Load(); count != 2 {
+			t.Fatalf("uploads = %d, want 2", count)
 		}
 	})
 
