@@ -259,14 +259,15 @@ func replacementLink(values []string) string {
 
 func decodeAPIError(response *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(response.Body, maximumJSONResponse+1))
+	if len(raw) > maximumJSONResponse || !json.Valid(raw) {
+		return invalidResponse("response body")
+	}
 	apiError := &errs.APIError{
 		Status:     response.StatusCode,
 		RetryAfter: response.Header.Get("Retry-After"),
 	}
-	if len(raw) <= maximumJSONResponse && json.Valid(raw) {
-		apiError.Raw = append(json.RawMessage(nil), raw...)
-		_ = decodeResponseJSON(raw, apiError)
-	}
+	apiError.Raw = append(json.RawMessage(nil), raw...)
+	_ = decodeResponseJSON(raw, apiError)
 	apiError.Status = response.StatusCode
 	if apiError.RequestID == "" {
 		apiError.RequestID = response.Header.Get("X-Request-Id")
