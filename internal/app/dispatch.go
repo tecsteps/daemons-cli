@@ -14,8 +14,6 @@ var commandRegistry = map[string]commandHandler{
 	"logout":          errorHandler(logout),
 	"whoami":          errorHandler(whoami),
 	"capabilities":    errorHandler(capabilities),
-	"servers list":    errorHandler(listServers),
-	"servers show":    errorHandler(showServer),
 	"list":            errorHandler(listDaemons),
 	"ls":              errorHandler(listDaemons),
 	"daemons list":    errorHandler(listDaemons),

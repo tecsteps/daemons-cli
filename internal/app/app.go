@@ -25,8 +25,6 @@ Commands:
   logout
   whoami
   capabilities
-  servers list
-  servers show ID
   list | ls | daemons list
   show ID | daemons show ID
   spawn NAME --server SERVER [--agent AGENT] [--disk-quota-gb N]
