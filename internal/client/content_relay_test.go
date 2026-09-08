@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,58 @@ func TestV2ProvisioningLogsRemainStructuredControlPlaneMetadata(t *testing.T) {
 	result, err := api.ListLogs(context.Background(), "workspace", "provisioning", "", "6", 100)
 	if err != nil || len(result.Data) != 1 || result.Data[0].Source != "provisioning" {
 		t.Fatalf("result %+v, error %v", result, err)
+	}
+}
+
+func TestRepositoryPrepareBindsResourceAndKeepsSelectorsInGuestStream(t *testing.T) {
+	const daemon = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const repository = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const operation = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	for _, substituted := range []bool{false, true} {
+		t.Run(fmt.Sprint(substituted), func(t *testing.T) {
+			guestCalls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Daemons-Api-Version", "v1")
+				if r.URL.Path == "/api/v1" {
+					io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
+					return
+				}
+				if r.URL.Path == "/api/v1/daemons/"+daemon+"/access-tickets" {
+					var metadata map[string]string
+					if err := json.NewDecoder(r.Body).Decode(&metadata); err != nil {
+						t.Error(err)
+					}
+					if len(metadata) != 3 || metadata["resource_uuid"] != repository || metadata["operation_uuid"] != operation || metadata["action"] != "repository.prepare" {
+						t.Error("repository metadata boundary")
+					}
+					resource := repository
+					if substituted {
+						resource = operation
+					}
+					json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"ticket": "opaque.ticket", "ticket_version": 2, "expires_in": 30, "method": "POST", "gateway_path": "/v1/workspaces/" + daemon + "/repositories/" + resource + "/prepare"}})
+					return
+				}
+				guestCalls++
+				if r.URL.Path != "/v1/workspaces/"+daemon+"/repositories/"+repository+"/prepare" || r.Header.Get("Authorization") != "DaemonsTicket opaque.ticket" {
+					t.Error("guest binding")
+				}
+				body, _ := io.ReadAll(r.Body)
+				if string(body) != `{"local_branch":"private-branch-canary"}` {
+					t.Error("selector was changed")
+				}
+				io.WriteString(w, `{}`)
+			}))
+			defer server.Close()
+			c, _ := New(server.URL, "synthetic-control-credential")
+			err := c.AccessRepositoryPrepare(context.Background(), daemon, repository, operation, strings.NewReader(`{"local_branch":"private-branch-canary"}`), io.Discard)
+			if substituted {
+				if err == nil || guestCalls != 0 {
+					t.Fatal("substituted resource was contacted")
+				}
+			} else if err != nil || guestCalls != 1 {
+				t.Fatalf("calls=%d error=%v", guestCalls, err)
+			}
+		})
 	}
 }
 
