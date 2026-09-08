@@ -33,10 +33,11 @@ Commands:
   operations list [--limit N]
   operations show ID
   attach DAEMON [--session NAME]
-  upload DAEMON PATH...
+  upload DAEMON PATH... [--force]
   payload put DAEMON OPERATION FILE
   payload receipt DAEMON OPERATION
   files receipt DAEMON OPERATION
+  files recover DAEMON
   task run DAEMON (PROMPT | -) [--agent AGENT] [--model MODEL] [--permission-mode MODE]
   task show DAEMON TASK
   task cancel DAEMON TASK
@@ -49,7 +50,8 @@ Commands:
   ide DAEMON --editor code|cursor|zed|jetbrains [--folder NAME] [--cached]
 
 Mutation options: --idempotency-key KEY --wait --wait-timeout DURATION (examples: 1s, 10m; bare numbers mean seconds)
-Global options: --json --quiet --host URL --no-color --request-id ID --version`
+Global options: --json --quiet --host URL --no-color --request-id ID --version
+Workspace layout: DAEMONS_WORKSPACE_ROOT (default /home/dr-agent/workspace) DAEMONS_UPLOAD_FOLDER (default uploads)`
 
 type Dependencies struct {
 	Input             io.Reader

@@ -130,6 +130,11 @@ func TestUploadValidatesLocallyThenUsesCanonicalEndpoint(t *testing.T) {
 		case "/api/v1/daemons":
 			io.WriteString(writer, `{"data":[{"id":"daemon-uuid","name":"research","status":"running","primary_agent":"codex","server":{"name":"host"}}],"meta":{}}`)
 		case "/api/v1/daemons/daemon-uuid/files":
+			if request.Method == http.MethodGet {
+				// The pre-upload overwrite check reads the upload folder.
+				io.WriteString(writer, `{"data":[],"meta":{"next_cursor":null}}`)
+				return
+			}
 			if err := request.ParseMultipartForm(11 << 20); err != nil {
 				t.Errorf("ParseMultipartForm() = %v", err)
 			}
@@ -165,8 +170,8 @@ func TestUploadValidatesLocallyThenUsesCanonicalEndpoint(t *testing.T) {
 	if code != 0 || output.String() != "/root/workspace/uploads/note.txt\n" {
 		t.Fatalf("upload exit=%d stdout=%q stderr=%q", code, output.String(), errorOutput.String())
 	}
-	if requests != 3 {
-		t.Fatalf("requests = %d, want daemon resolution, version preflight, and upload", requests)
+	if requests != 4 {
+		t.Fatalf("requests = %d, want daemon resolution, version preflight, the overwrite check, and upload", requests)
 	}
 
 	requests = 0

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/tecsteps/daemons-cli/internal/client"
 )
 
 func TestValidateOpensAllRegularFilesBeforeUpload(t *testing.T) {
@@ -51,22 +53,25 @@ func TestValidateRejectsOversizedFiles(t *testing.T) {
 }
 
 func TestSafeUploadPath(t *testing.T) {
+	paths := client.DefaultWorkspacePaths()
 	for _, value := range []string{
 		"/root/workspace/uploads/note.txt",
 		"/root/workspace/uploads/design note.png",
+		"/home/dr-agent/workspace/uploads/note.txt",
 	} {
-		if !safeUploadPath(value) {
-			t.Fatalf("safeUploadPath(%q) = false", value)
+		if !paths.SafeUploadPath(value) {
+			t.Fatalf("SafeUploadPath(%q) = false", value)
 		}
 	}
 	for _, value := range []string{
 		"/root/workspace/uploads/../secret",
 		"/root/workspace/other/note.txt",
 		"relative.txt",
+		"/home/dr-agent/workspace/other/note.txt",
 		"/root/workspace/uploads/note.txt\nunsafe",
 	} {
-		if safeUploadPath(value) {
-			t.Fatalf("safeUploadPath(%q) = true", value)
+		if paths.SafeUploadPath(value) {
+			t.Fatalf("SafeUploadPath(%q) = true", value)
 		}
 	}
 }
