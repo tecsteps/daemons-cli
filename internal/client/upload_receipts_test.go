@@ -126,7 +126,7 @@ func TestInterruptedUploadReportsItsOperationWithoutReplay(t *testing.T) {
 	file.WriteString("private-file-content")
 	file.Seek(0, 0)
 	c, _ := New(server.URL, "test-token")
-	_, err = c.uploadAccess(context.Background(), "workspace", "file.txt", file)
+	_, err = c.uploadAccess(context.Background(), "workspace", NewUploadOperationID(), DefaultWorkspacePaths(), "file.txt", file)
 	mutex.Lock()
 	defer mutex.Unlock()
 	if err == nil || errs.ExitCode(err) != 8 || !payloadUUID.MatchString(operation) ||

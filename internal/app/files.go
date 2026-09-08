@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/tecsteps/daemons-cli/internal/client"
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
@@ -60,10 +61,14 @@ func listFiles(ctx context.Context, arguments []string, options globalOptions, d
 	if len(positionals) < 1 || len(positionals) > 2 || positionals[0] == "" {
 		return errs.New("usage_error", filesListUsage, 2)
 	}
+	paths, err := workspacePaths(dependencies)
+	if err != nil {
+		return err
+	}
 	workspacePath := ""
 	if len(positionals) == 2 {
 		var pathErr error
-		workspacePath, pathErr = normalizeWorkspacePath(positionals[1])
+		workspacePath, pathErr = normalizeWorkspacePath(paths, positionals[1])
 		if pathErr != nil {
 			return pathErr
 		}
@@ -126,24 +131,16 @@ func listFiles(ctx context.Context, arguments []string, options globalOptions, d
 	return writer.Flush()
 }
 
+// workspacePaths reads the configurable guest layout once per command. The
+// confined root is the default; DAEMONS_WORKSPACE_ROOT replaces it.
+func workspacePaths(dependencies Dependencies) (client.WorkspacePaths, error) {
+	return client.NewWorkspacePaths(dependencies.Environment)
+}
+
 // normalizeWorkspacePath accepts the relative API form and the absolute path
 // returned by upload. Other absolute paths remain local validation errors.
-func normalizeWorkspacePath(value string) (string, error) {
-	const workspaceRoot = "/root/workspace"
-	switch {
-	case value == workspaceRoot || value == workspaceRoot+"/":
-		value = ""
-	case strings.HasPrefix(value, workspaceRoot+"/"):
-		value = strings.TrimSuffix(strings.TrimPrefix(value, workspaceRoot+"/"), "/")
-	case strings.HasPrefix(value, "/"):
-		return "", errs.New("unsafe_workspace_path", "Absolute PATH must be /root/workspace or a path below it.", 2)
-	default:
-		value = strings.TrimSuffix(value, "/")
-	}
-	if !safeRelativeWorkspacePath(value) {
-		return "", errs.New("unsafe_workspace_path", "PATH must be a plain relative workspace path without . or .. segments.", 2)
-	}
-	return value, nil
+func normalizeWorkspacePath(paths client.WorkspacePaths, value string) (string, error) {
+	return paths.Normalize(value)
 }
 
 func downloadFile(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) error {
@@ -155,7 +152,11 @@ func downloadFile(ctx context.Context, arguments []string, options globalOptions
 	if len(arguments) != 3 || arguments[0] == "" || arguments[2] == "" || arguments[2] == "-" {
 		return errs.New("usage_error", usage, 2)
 	}
-	workspacePath, err := normalizeWorkspacePath(arguments[1])
+	paths, err := workspacePaths(dependencies)
+	if err != nil {
+		return err
+	}
+	workspacePath, err := normalizeWorkspacePath(paths, arguments[1])
 	if err != nil {
 		return err
 	}
