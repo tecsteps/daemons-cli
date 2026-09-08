@@ -35,13 +35,21 @@ func (c *Client) uploadAccess(ctx context.Context, daemonID, filename string, fi
 	binary.BigEndian.PutUint32(prelude, uint32(len(selector)))
 	copy(prelude[4:], selector)
 	var output boundedContentJSON
-	if err := c.AccessContent(ctx, daemonID, newAccessOperationID(), "files.upload", io.MultiReader(bytes.NewReader(prelude), file), &output); err != nil {
-		return result, err
+	operationID := newAccessOperationID()
+	if err := c.AccessContent(ctx, daemonID, operationID, "files.upload", io.MultiReader(bytes.NewReader(prelude), file), &output); err != nil {
+		return result, uploadOutcomeError(operationID, err)
 	}
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
-		return result, invalidMutationResponse("upload receipt")
+		return result, uploadOutcomeError(operationID, invalidMutationResponse("upload receipt"))
 	}
 	return result, nil
+}
+
+func uploadOutcomeError(operationID string, err error) error {
+	if errs.ExitCode(err) != 8 {
+		return err
+	}
+	return errs.New(errs.Code(err), fmt.Sprintf("Upload outcome is unknown. Check operation %s with: daemons files receipt DAEMON %s. Do not replay the upload automatically.", operationID, operationID), 8)
 }
 
 type boundedContentJSON struct {

@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
 func TestUploadReceiptRejectsAmbiguousOrPrivateResponses(t *testing.T) {
@@ -66,5 +69,50 @@ func TestUploadReceiptUsesFreshFileReadTicketWithoutUpload(t *testing.T) {
 	}
 	if mints != 2 || queries != 2 {
 		t.Fatal("receipt lookup reused authority or replayed upload")
+	}
+}
+
+func TestInterruptedUploadReportsItsOperationWithoutReplay(t *testing.T) {
+	operation, uploads := "", 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Daemons-Api-Version", "v1")
+		if r.URL.Path == "/api/v1" {
+			io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/access-tickets") {
+			var metadata map[string]string
+			if json.NewDecoder(r.Body).Decode(&metadata) != nil {
+				t.Error("invalid metadata")
+			}
+			operation = metadata["operation_uuid"]
+			io.WriteString(w, `{"data":{"ticket":"opaque.ticket","ticket_version":2,"expires_in":30,"method":"PUT","gateway_path":"/v1/workspaces/workspace/files/uploads/`+operation+`"}}`)
+			return
+		}
+		if r.Method != "PUT" || !strings.HasSuffix(r.URL.Path, "/files/uploads/"+operation) {
+			t.Error("unexpected endpoint")
+		}
+		uploads++
+		io.Copy(io.Discard, r.Body)
+		connection, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		connection.Close()
+	}))
+	defer server.Close()
+	file, err := os.CreateTemp(t.TempDir(), "upload-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	file.WriteString("private-file-content")
+	file.Seek(0, 0)
+	c, _ := New(server.URL, "test-token")
+	_, err = c.uploadAccess(context.Background(), "workspace", "file.txt", file)
+	if err == nil || errs.ExitCode(err) != 8 || !payloadUUID.MatchString(operation) ||
+		!strings.Contains(err.Error(), "daemons files receipt DAEMON "+operation) || strings.Contains(err.Error(), "private-file-content") || uploads != 1 {
+		t.Fatalf("missing recovery identity or replayed upload: count=%d error=%v", uploads, err)
 	}
 }
