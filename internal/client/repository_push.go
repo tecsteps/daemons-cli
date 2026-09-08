@@ -9,11 +9,62 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
 var repositoryUUID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+type RepositoryPushPrepared struct {
+	RequestUUID string `json:"request_uuid"`
+	State       string `json:"state"`
+}
+
+func ValidRepositoryBranch(branch string) bool {
+	ref := "refs/heads/" + branch
+	if !utf8.ValidString(branch) || branch == "" || len(ref) > 255 || strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.HasSuffix(ref, ".") {
+		return false
+	}
+	for _, character := range ref {
+		if character <= 32 || character == 127 || strings.ContainsRune("~^:?*[\\", character) {
+			return false
+		}
+	}
+	for _, part := range strings.Split(ref, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
+}
+
+// RequestRepositoryPush sends selectors only to the guest and never retries.
+// A malformed acknowledgement may follow successful publication, so it is ambiguous.
+func (c *Client) RequestRepositoryPush(ctx context.Context, daemonID, repositoryID, branch string) (RepositoryPushPrepared, error) {
+	var result RepositoryPushPrepared
+	if !repositoryUUID.MatchString(daemonID) || !repositoryUUID.MatchString(repositoryID) || !ValidRepositoryBranch(branch) {
+		return result, errs.New("invalid_payload", "A daemon UUID, repository UUID and valid local branch are required.", 2)
+	}
+	body, err := json.Marshal(map[string]string{"repository_uuid": repositoryID, "local_branch": branch})
+	if err != nil {
+		return result, err
+	}
+	output := boundedContentJSON{maximum: 4096}
+	err = c.AccessRepositoryPrepare(ctx, daemonID, repositoryID, newAccessOperationID(), bytes.NewReader(body), &output)
+	if err != nil && errs.ExitCode(err) != 8 {
+		return result, err
+	}
+	if err == nil {
+		_, exact := repositoryObject(output.Bytes(), []string{"request_uuid", "state"})
+		if exact && utf8.Valid(output.Bytes()) && json.Unmarshal(output.Bytes(), &result) == nil && repositoryUUID.MatchString(result.RequestUUID) && result.State == "pending" {
+			return result, nil
+		}
+	}
+	return RepositoryPushPrepared{}, errs.New("outcome_unknown", "Request outcome is unknown. Check the push list before submitting again. Do not retry automatically.", 8)
+}
 
 type RepositoryPush struct {
 	RequestUUID         string  `json:"request_uuid"`

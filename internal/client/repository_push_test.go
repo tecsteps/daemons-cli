@@ -11,6 +11,19 @@ import (
 
 const repositoryFixtureUUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
+func TestRepositoryBranchValidationMatchesFullReferenceConstraints(t *testing.T) {
+	for _, branch := range []string{"feature", "feature/nested", "feature/日本語", strings.Repeat("a", 244)} {
+		if !ValidRepositoryBranch(branch) {
+			t.Error("valid branch rejected")
+		}
+	}
+	for _, branch := range []string{"", "feature..old", ".hidden", "x/.hidden", "x.lock", "x/", "x//y", "x.", "x@{1}", "x~1", "x^", "x:y", "x?", "x*", "x[", "x\\y", "x\ny", strings.Repeat("a", 245), string([]byte{0xff})} {
+		if ValidRepositoryBranch(branch) {
+			t.Error("invalid branch accepted")
+		}
+	}
+}
+
 func repositoryMetadataFixture(t *testing.T) string {
 	t.Helper()
 	one := int64(1)

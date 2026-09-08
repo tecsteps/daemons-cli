@@ -17,6 +17,56 @@ import (
 const pushDaemonUUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 const pushRequestUUID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
+func TestPushRequestUsesOnlyGuestSelectorsAndNeverRetriesAmbiguousAcknowledgements(t *testing.T) {
+	for _, body := range []string{
+		`{"request_uuid":"` + pushRequestUUID + `","state":"pending"}`,
+		`{"request_uuid":"` + pushRequestUUID + `","state":"approved"}`,
+		`{"request_uuid":"` + pushRequestUUID + `","state":"pending","content":"private-canary"}`,
+		`{"request_uuid":"` + pushRequestUUID + `","state":"pending","state":"pending"}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			metadataCalls, guestCalls := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Daemons-Api-Version", "v1")
+				if r.URL.Path == "/api/v1" {
+					io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
+					return
+				}
+				if r.URL.Path == "/api/v1/daemons/"+pushDaemonUUID+"/access-tickets" {
+					metadataCalls++
+					var metadata map[string]string
+					json.NewDecoder(r.Body).Decode(&metadata)
+					if len(metadata) != 3 || metadata["resource_uuid"] != pushRequestUUID || metadata["action"] != "repository.prepare" {
+						t.Error("central selector boundary")
+					}
+					json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"ticket": "opaque.ticket", "ticket_version": 2, "expires_in": 30, "method": "POST", "gateway_path": "/v1/workspaces/" + pushDaemonUUID + "/repositories/" + pushRequestUUID + "/prepare"}})
+					return
+				}
+				guestCalls++
+				if r.URL.Path != "/v1/workspaces/"+pushDaemonUUID+"/repositories/"+pushRequestUUID+"/prepare" || r.Header.Get("Authorization") != "DaemonsTicket opaque.ticket" {
+					t.Error("wrong guest transport")
+				}
+				var selector map[string]string
+				json.NewDecoder(r.Body).Decode(&selector)
+				if len(selector) != 2 || selector["repository_uuid"] != pushRequestUUID || selector["local_branch"] != "private-branch-canary" {
+					t.Error("wrong guest selector")
+				}
+				io.WriteString(w, body)
+			}))
+			defer server.Close()
+			var out, stderr bytes.Buffer
+			code := Run(context.Background(), []string{"--host", server.URL, "--json", "push", "request", pushDaemonUUID, pushRequestUUID, "private-branch-canary"}, phaseOneDependencies(t, server.Client(), &out, &stderr))
+			valid := body == `{"request_uuid":"`+pushRequestUUID+`","state":"pending"}`
+			if metadataCalls != 1 || guestCalls != 1 || (valid && code != 0) || (!valid && code != 8) {
+				t.Fatalf("code=%d metadata=%d guest=%d error=%s", code, metadataCalls, guestCalls, stderr.String())
+			}
+			if strings.Contains(out.String()+stderr.String(), "private-canary") || strings.Contains(out.String()+stderr.String(), "private-branch-canary") {
+				t.Error("private selector or response content escaped")
+			}
+		})
+	}
+}
+
 func pushFixture() client.RepositoryPush {
 	one := int64(1)
 	return client.RepositoryPush{RequestUUID: pushRequestUUID, AssignedSubjectUUID: pushDaemonUUID,
@@ -94,6 +144,9 @@ func TestPushShowFollowsBoundedMetadataCursor(t *testing.T) {
 
 func TestPushRejectsApprovalFlagsAndInvalidSelectorsWithoutNetwork(t *testing.T) {
 	for _, args := range [][]string{
+		{"push", "request", pushDaemonUUID, "1", "feature"},
+		{"push", "request", pushDaemonUUID, pushRequestUUID, "feature~1"},
+		{"push", "request", pushDaemonUUID, pushRequestUUID, "feature", "--yes"},
 		{"push", "approve", pushDaemonUUID, pushRequestUUID}, {"push", "list", pushDaemonUUID, "--yes"},
 		{"push", "show", pushDaemonUUID, "1"}, {"push", "list", pushDaemonUUID, "--cursor", "1"},
 		{"push", "list", "--yes"}, {"push", "show", pushDaemonUUID, pushRequestUUID, "--yes"},

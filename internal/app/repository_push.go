@@ -6,10 +6,11 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/tecsteps/daemons-cli/internal/client"
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
-const repositoryPushUsage = "Usage: daemons push list DAEMON [--cursor UUID] | daemons push show DAEMON REQUEST_UUID. Push approval is browser-only."
+const repositoryPushUsage = "Usage: daemons push request DAEMON REPOSITORY_UUID LOCAL_BRANCH | daemons push list DAEMON [--cursor UUID] | daemons push show DAEMON REQUEST_UUID. Push approval is browser-only."
 
 // A subdispatcher keeps push operations separate from the root's two-word
 // command matching. No bearer-based approval command is registered.
@@ -24,6 +25,10 @@ func repositoryPush(ctx context.Context, args []string, options globalOptions, d
 	}
 	cursor, requestID := "", ""
 	switch args[0] {
+	case "request":
+		if len(args) != 4 || !uuidPattern.MatchString(args[2]) || !client.ValidRepositoryBranch(args[3]) || strings.HasPrefix(args[3], "-") {
+			return usage()
+		}
 	case "list":
 		if len(args) != 2 && len(args) != 4 {
 			return usage()
@@ -49,6 +54,18 @@ func repositoryPush(ctx context.Context, args []string, options globalOptions, d
 	daemonID, err := resolveDaemonID(ctx, api, args[1])
 	if err != nil {
 		return err
+	}
+	if args[0] == "request" {
+		prepared, err := api.RequestRepositoryPush(ctx, daemonID, args[2], args[3])
+		if err != nil {
+			return err
+		}
+		if options.JSON {
+			writeJSON(deps.Output, prepared)
+		} else {
+			fmt.Fprintf(deps.Output, "Request: %s\nState: pending\nReview and approve in the browser.\n", prepared.RequestUUID)
+		}
+		return nil
 	}
 	seen := map[string]bool{}
 	for pageNumber := 0; pageNumber < 50; pageNumber++ {
