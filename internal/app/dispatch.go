@@ -64,6 +64,7 @@ var commandRegistry = map[string]commandHandler{
 	"ssh-config":          errorHandler(sshConfig),
 	"ssh-proxy":           sshProxy,
 	"ide":                 errorHandler(ide),
+	"push":                errorHandler(repositoryPush),
 }
 
 func lifecycleHandler(action string) commandHandler {
