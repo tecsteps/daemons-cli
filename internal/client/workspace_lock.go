@@ -54,6 +54,7 @@ const (
 var (
 	lockUUIDPattern   = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	lockActionPattern = regexp.MustCompile(`^[a-z][a-z0-9_.]{0,95}$`)
+	lockBase64URL     = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	lockPinPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	lockSecretPattern = regexp.MustCompile(`^(?:[0-9]{4}|[0-9]{6})$`)
 	lockPhrasePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -1153,4 +1154,79 @@ func (a LockDeviceAuthority) RespondToLockDeviceChallenge(envelopeText, action, 
 		return "", LockDenied()
 	}
 	return string(reply), nil
+}
+
+// LockHandoffBody approves a reassignment with the engineer's own factor. Every
+// scope field comes from the Control Plane's view of the operation that exists,
+// never from the user, so the guest and the client bind the same reassignment.
+func LockHandoffBody(secret LockSecret, phrase string, scope *LockHandoffScope, challenge LockChallenge) (map[string]any, error) {
+	body, err := lockEngineerFactor(secret, phrase)
+	if err != nil {
+		return nil, err
+	}
+	if scope == nil || !scope.PreserveData {
+		return nil, lockDeniedAs("lock_handoff_unavailable",
+			"There is no reassignment waiting for this workspace to be handed over.", 5)
+	}
+	var successor any
+	if scope.SuccessorMembershipUUID != nil {
+		successor = *scope.SuccessorMembershipUUID
+	}
+	if scope.OldAssignmentGeneration != challenge.AssignmentGeneration {
+		return nil, lockDeniedAs("lock_handoff_scope_denied",
+			"The reassignment moved on. Read the pending handoff again before approving it.", 5)
+	}
+	body["handoff_scope"] = map[string]any{
+		// The identity comes from the guest's own verified challenge, never from the
+		// Control Plane view, so a substituted workspace cannot be approved here.
+		"organization_uuid":         challenge.OrganizationUUID,
+		"workspace_uuid":            challenge.WorkspaceUUID,
+		"operation_uuid":            scope.OperationUUID,
+		"successor_membership_uuid": successor,
+		"old_assignment_generation": scope.OldAssignmentGeneration,
+		"new_assignment_generation": scope.NewAssignmentGeneration,
+		"old_placement_generation":  scope.OldPlacementGeneration,
+		"new_placement_generation":  scope.NewPlacementGeneration,
+		"preserve_data":             true,
+	}
+	return body, nil
+}
+
+// LockReplacementBody authorizes the Owner's pending organization key
+// replacement. The rotation identity comes from the Control Plane and the
+// confirmation code from the Owner directly, so both parties must agree before
+// the guest accepts the engineer's factor.
+func LockReplacementBody(secret LockSecret, phrase, confirmationNonce string, pending *LockReplacementPending) (map[string]any, error) {
+	body, err := lockEngineerFactor(secret, phrase)
+	if err != nil {
+		return nil, err
+	}
+	if pending == nil {
+		return nil, lockDeniedAs("lock_replacement_unavailable",
+			"There is no organization key replacement waiting for this workspace.", 5)
+	}
+	if len(confirmationNonce) != 43 || !lockBase64URL.MatchString(confirmationNonce) {
+		return nil, lockDeniedAs("usage_error",
+			"The confirmation code is the 43 character value the Owner read out.", 2)
+	}
+	body["rotation_uuid"] = pending.RotationUUID
+	body["confirmation_nonce"] = confirmationNonce
+	body["expected_key_revision"] = pending.ExpectedKeyRevision
+	body["new_key_revision"] = pending.NewKeyRevision
+	return body, nil
+}
+
+// lockEngineerFactor accepts exactly one factor: a PIN or a recovery phrase,
+// never both and never neither.
+func lockEngineerFactor(secret LockSecret, phrase string) (map[string]any, error) {
+	if (secret == "") == (phrase == "") {
+		return nil, lockDeniedAs("usage_error", "Enter either the workspace PIN or the recovery phrase.", 2)
+	}
+	if phrase != "" {
+		return map[string]any{"credential_type": "recovery_phrase", "secret": phrase}, nil
+	}
+	if !secret.Valid() {
+		return nil, lockDeniedAs("usage_error", "A PIN is exactly four or six digits.", 2)
+	}
+	return map[string]any{"credential_type": "pin", "secret": string(secret)}, nil
 }

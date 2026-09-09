@@ -184,7 +184,15 @@ A grant lasts eight hours from verification with no sliding refresh, and it neve
 
 What the grant currently reaches: `daemons attach` answers the guest's device challenge with the stored grant, and refuses with `lock_device_required` (exit 5) when this device has none. Files, uploads and SSH still send only a Control Plane ticket, so on a protected workspace they stay denied by the guest until that wiring lands. Use `daemons unlock` on this device before the terminal, and expect the other access kinds to be refused rather than to fall back.
 
-The lock channel also carries the organization key actions and the assignee handoff. This CLI recognises them as admitted rather than reporting a version gap, but it does not drive them yet: the Owner performs organization enrollment, recovery, rotation and replacement in the browser, and the engineer's handoff and replacement authorization need the pending exchange the Control Plane does not hand to a CLI client yet.
+```sh
+daemons lock exchanges DAEMON              # what is waiting for you on this workspace
+daemons lock handoff DAEMON                # approve the reassignment with your own factor
+daemons lock authorize-replacement DAEMON  # authorize the Owner's organization key replacement
+```
+
+The engineer's two lock-channel decisions are driven here. `lock exchanges` reads what the platform is waiting on, and each command binds the exchange the platform actually issued: the handoff scope comes from the reassignment operation that exists and is checked against the guest's own verified challenge, so a substituted workspace or a stale generation is refused rather than approved. `authorize-replacement` additionally asks for the confirmation code the Owner reads out: the Control Plane never carries it, which is what makes the authorization an agreement with the Owner rather than with the platform.
+
+The Owner organization actions (enroll, recover, rotate, and staging a replacement) stay in the browser in v1: they need a password entered by the Owner, and this CLI does not offer one.
 
 `daemons lock DAEMON` gives up this device's grant. When the Control Plane does not admit the guest-wide lock action yet, the request never reaches the guest, so the grant is kept and the refusal says so; every other outcome, including an uncertain one, drops the local grant.
 

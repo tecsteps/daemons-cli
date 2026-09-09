@@ -268,3 +268,92 @@ func (c *Client) ReadWorkspaceLockIdentity(ctx context.Context, daemonID, operat
 	}
 	return offered, nil
 }
+
+// LockExchangeView is the Control Plane's read-only description of the lock
+// exchanges this actor may open. It carries bindings the client must reproduce
+// exactly, never a secret: the Owner's confirmation nonce is deliberately
+// absent, because the Owner gives it to the engineer directly.
+type LockExchangeView struct {
+	Data struct {
+		Version       int    `json:"version"`
+		WorkspaceUUID string `json:"workspace_uuid"`
+		Lock          struct {
+			State      string  `json:"state"`
+			ObservedAt *string `json:"observed_at"`
+			Revision   *int64  `json:"revision"`
+		} `json:"lock"`
+		Actor struct {
+			IsOwner    bool `json:"is_owner"`
+			IsAssignee bool `json:"is_assignee"`
+		} `json:"actor"`
+		Handoff     *LockHandoffScope       `json:"handoff"`
+		Replacement *LockReplacementPending `json:"replacement"`
+	} `json:"data"`
+	Meta map[string]any `json:"meta"`
+}
+
+// LockHandoffScope is the reassignment the engineer would be approving. Every
+// field is signed into the guest request, so a scope the platform did not issue
+// cannot be substituted for one it did.
+type LockHandoffScope struct {
+	OperationUUID           string  `json:"operation_uuid"`
+	SuccessorMembershipUUID *string `json:"successor_membership_uuid"`
+	OldAssignmentGeneration int64   `json:"old_assignment_generation"`
+	NewAssignmentGeneration int64   `json:"new_assignment_generation"`
+	OldPlacementGeneration  int64   `json:"old_placement_generation"`
+	NewPlacementGeneration  int64   `json:"new_placement_generation"`
+	PreserveData            bool    `json:"preserve_data"`
+	ApprovalRecorded        bool    `json:"approval_recorded"`
+}
+
+// LockReplacementPending names the organization key replacement waiting on this
+// engineer. The confirmation nonce is not here and never will be.
+type LockReplacementPending struct {
+	RotationUUID            string `json:"rotation_uuid"`
+	ExpectedKeyRevision     int64  `json:"expected_key_revision"`
+	NewKeyRevision          int64  `json:"new_key_revision"`
+	ConfirmationNonceNeeded bool   `json:"confirmation_nonce_required"`
+}
+
+// LockExchanges reads what this actor may open. It authorizes nothing: the
+// guest still refuses any scope that does not match its own pending record.
+func (c *Client) LockExchanges(ctx context.Context, daemonID string) (LockExchangeView, error) {
+	var result LockExchangeView
+	if err := c.Preflight(ctx); err != nil {
+		return result, err
+	}
+	err := c.doJSON(ctx, http.MethodGet, "/daemons/"+url.PathEscape(daemonID)+"/lock-exchanges",
+		nil, true, "", true, &result)
+	if err != nil {
+		return LockExchangeView{}, err
+	}
+	if result.Data.Version != 1 || result.Data.WorkspaceUUID != daemonID ||
+		!lockStateKnown(result.Data.Lock.State) {
+		return LockExchangeView{}, invalidResponse("data.lock")
+	}
+	if scope := result.Data.Handoff; scope != nil {
+		if !payloadUUID.MatchString(scope.OperationUUID) || !scope.PreserveData ||
+			scope.NewAssignmentGeneration != scope.OldAssignmentGeneration+1 ||
+			scope.NewPlacementGeneration != scope.OldPlacementGeneration ||
+			scope.OldAssignmentGeneration < 1 || scope.OldPlacementGeneration < 1 ||
+			(scope.SuccessorMembershipUUID != nil && !payloadUUID.MatchString(*scope.SuccessorMembershipUUID)) {
+			return LockExchangeView{}, invalidResponse("data.handoff")
+		}
+	}
+	if pending := result.Data.Replacement; pending != nil {
+		if !payloadUUID.MatchString(pending.RotationUUID) || pending.ExpectedKeyRevision < 1 ||
+			pending.NewKeyRevision != pending.ExpectedKeyRevision+1 {
+			return LockExchangeView{}, invalidResponse("data.replacement")
+		}
+	}
+	return result, nil
+}
+
+func lockStateKnown(state string) bool {
+	for _, known := range []string{"none", "open", "locked", "unlocked"} {
+		if known == state {
+			return true
+		}
+	}
+	return false
+}

@@ -27,6 +27,9 @@ const lockUsage = `Usage:
   daemons lock setup DAEMON
   daemons lock change DAEMON
   daemons lock recover DAEMON
+  daemons lock exchanges DAEMON
+  daemons lock handoff DAEMON
+  daemons lock authorize-replacement DAEMON
   daemons lock pair DAEMON [--forget]`
 
 // lockSecretFlags are refused outright. Naming one is a usage error, not a
@@ -92,6 +95,12 @@ func runLockCommand(ctx context.Context, subcommand string, arguments []string, 
 		return changeWorkspaceLock(ctx, daemonArgument, options, dependencies)
 	case "recover":
 		return recoverWorkspaceLock(ctx, daemonArgument, options, dependencies)
+	case "exchanges":
+		return workspaceLockExchanges(ctx, daemonArgument, options, dependencies)
+	case "handoff":
+		return approveWorkspaceHandoff(ctx, daemonArgument, options, dependencies)
+	case "authorize-replacement":
+		return authorizeWorkspaceReplacement(ctx, daemonArgument, options, dependencies)
 	}
 	return errs.New("usage_error", lockUsage, 2)
 }
@@ -718,4 +727,165 @@ func pairWorkspaceLock(ctx context.Context, daemonArgument string, forget bool, 
 	}
 	fmt.Fprintf(dependencies.Output, "Pinned the guest identity for %s. Any earlier device grant was discarded.\n", lock.daemonName)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Pending exchanges: what this device may open, and the two the engineer drives.
+// ---------------------------------------------------------------------------
+
+// workspaceLockExchanges reports the exchanges waiting on this actor. It reads
+// state only: nothing here opens an exchange or touches a factor.
+func workspaceLockExchanges(ctx context.Context, daemonArgument string, options globalOptions, dependencies Dependencies) error {
+	lock, err := newLockContext(ctx, daemonArgument, options, dependencies)
+	if err != nil {
+		return err
+	}
+	view, err := lock.api.LockExchanges(ctx, lock.daemonID)
+	if err != nil {
+		return err
+	}
+	data := view.Data
+	if options.JSON {
+		writeJSON(dependencies.Output, map[string]any{
+			"data": map[string]any{"workspace": lock.daemonID, "lock_state": data.Lock.State,
+				"is_owner": data.Actor.IsOwner, "is_assignee": data.Actor.IsAssignee,
+				"handoff_pending": data.Handoff != nil, "replacement_pending": data.Replacement != nil},
+			"meta": map[string]any{},
+		})
+		return nil
+	}
+	fmt.Fprintf(dependencies.Output, "Lock state: %s\n", data.Lock.State)
+	if data.Handoff != nil {
+		successor := "unassigned"
+		if data.Handoff.SuccessorMembershipUUID != nil {
+			successor = *data.Handoff.SuccessorMembershipUUID
+		}
+		fmt.Fprintf(dependencies.Output, "A reassignment to %s is waiting for your approval. Run daemons lock handoff %s.\n",
+			successor, lock.daemonName)
+	}
+	if data.Replacement != nil {
+		fmt.Fprintf(dependencies.Output, "An organization key replacement (revision %d) is waiting for your authorization. Run daemons lock authorize-replacement %s.\n",
+			data.Replacement.NewKeyRevision, lock.daemonName)
+	}
+	if data.Handoff == nil && data.Replacement == nil {
+		fmt.Fprintln(dependencies.Output, "Nothing is waiting for you on this workspace.")
+	}
+	return nil
+}
+
+// approveWorkspaceHandoff approves the reassignment the platform is running,
+// with the engineer's own factor. The scope is the Control Plane's description
+// of that operation, checked against the guest's verified challenge.
+func approveWorkspaceHandoff(ctx context.Context, daemonArgument string, options globalOptions, dependencies Dependencies) error {
+	lock, err := newLockContext(ctx, daemonArgument, options, dependencies)
+	if err != nil {
+		return err
+	}
+	view, err := lock.api.LockExchanges(ctx, lock.daemonID)
+	if err != nil {
+		return err
+	}
+	if view.Data.Handoff == nil {
+		return errs.New("lock_handoff_unavailable",
+			"There is no reassignment waiting for this workspace to be handed over.", 5)
+	}
+	secret, phrase, err := readEngineerFactor(dependencies)
+	if err != nil {
+		return err
+	}
+	device, err := client.NewLockDeviceKey()
+	if err != nil {
+		return err
+	}
+	scope := view.Data.Handoff
+	_, _, err = lock.exchange(ctx, "lock.handoff", client.NewLockOperationID(), device, false,
+		func(challenge client.LockChallenge) (map[string]any, error) {
+			return client.LockHandoffBody(secret, phrase, scope, challenge)
+		})
+	secret, phrase = "", ""
+	if err != nil {
+		return err
+	}
+	if options.JSON {
+		writeJSON(dependencies.Output, map[string]any{
+			"data": map[string]any{"workspace": lock.daemonID, "operation": scope.OperationUUID, "state": "approved"},
+			"meta": map[string]any{},
+		})
+		return nil
+	}
+	fmt.Fprintf(dependencies.Output, "Approved the handover of %s. The platform can finish the reassignment now.\n", lock.daemonName)
+	return nil
+}
+
+// authorizeWorkspaceReplacement authorizes the Owner's pending organization key
+// replacement. The confirmation code comes from the Owner directly, so this
+// device is agreeing with a person, not with the platform.
+func authorizeWorkspaceReplacement(ctx context.Context, daemonArgument string, options globalOptions, dependencies Dependencies) error {
+	lock, err := newLockContext(ctx, daemonArgument, options, dependencies)
+	if err != nil {
+		return err
+	}
+	view, err := lock.api.LockExchanges(ctx, lock.daemonID)
+	if err != nil {
+		return err
+	}
+	if view.Data.Replacement == nil {
+		return errs.New("lock_replacement_unavailable",
+			"There is no organization key replacement waiting for this workspace.", 5)
+	}
+	nonce, err := readHiddenValue(dependencies, "Confirmation code from the Owner: ")
+	if err != nil {
+		return err
+	}
+	secret, phrase, err := readEngineerFactor(dependencies)
+	if err != nil {
+		return err
+	}
+	device, err := client.NewLockDeviceKey()
+	if err != nil {
+		return err
+	}
+	pending := view.Data.Replacement
+	_, _, err = lock.exchange(ctx, "lock.organization.replace", client.NewLockOperationID(), device, false,
+		func(client.LockChallenge) (map[string]any, error) {
+			return client.LockReplacementBody(secret, phrase, nonce, pending)
+		})
+	secret, phrase, nonce = "", "", ""
+	if err != nil {
+		return err
+	}
+	if options.JSON {
+		writeJSON(dependencies.Output, map[string]any{
+			"data": map[string]any{"workspace": lock.daemonID, "organization_key_revision": pending.NewKeyRevision,
+				"state": "authorized"},
+			"meta": map[string]any{},
+		})
+		return nil
+	}
+	fmt.Fprintf(dependencies.Output, "Authorized the organization key replacement on %s. The Owner can confirm it now.\n", lock.daemonName)
+	return nil
+}
+
+// readEngineerFactor takes exactly one factor at a hidden prompt. An empty PIN
+// means the engineer is using the recovery phrase instead.
+func readEngineerFactor(dependencies Dependencies) (client.LockSecret, string, error) {
+	value, err := readHiddenValue(dependencies, "Workspace PIN (leave empty to use the recovery phrase): ")
+	if err != nil {
+		return "", "", err
+	}
+	if value != "" {
+		secret := client.LockSecret(value)
+		if !secret.Valid() {
+			return "", "", errs.New("usage_error", "A PIN is exactly four or six digits.", 2)
+		}
+		return secret, "", nil
+	}
+	phrase, err := readHiddenValue(dependencies, "Recovery phrase: ")
+	if err != nil {
+		return "", "", err
+	}
+	if phrase == "" {
+		return "", "", errs.New("usage_error", "Enter either the workspace PIN or the recovery phrase.", 2)
+	}
+	return "", phrase, nil
 }
