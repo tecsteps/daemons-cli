@@ -151,7 +151,12 @@ func (c *Client) MintAccessTicket(ctx context.Context, daemonID, operationID, ac
 func (c *Client) mintAccessTicket(ctx context.Context, daemonID, operationID, action, taskID string) (AccessTicket, error) {
 	var result AccessTicket
 	metadata := map[string]string{"action": action, "operation_uuid": operationID}
-	if action == "tasks.submit" || action == "tasks.cancel" {
+	if action == "repository.prepare" {
+		if !payloadUUID.MatchString(taskID) || !payloadUUID.MatchString(operationID) || !payloadUUID.MatchString(daemonID) {
+			return result, invalidResponse("repository identity")
+		}
+		metadata["resource_uuid"] = taskID
+	} else if action == "tasks.submit" || action == "tasks.cancel" {
 		if !payloadUUID.MatchString(taskID) || !payloadUUID.MatchString(operationID) {
 			return result, invalidResponse("task identity")
 		}
@@ -168,6 +173,9 @@ func (c *Client) mintAccessTicket(ctx context.Context, daemonID, operationID, ac
 	}
 	suffix := map[string]string{"files.read": "/files/query", "files.download": "/files/downloads", "files.upload": "/files/uploads/" + operationID, "logs.read": "/logs/query", "logs.download": "/logs/downloads", "local_payload.put": "/local-payloads/" + operationID, "local_payload.receipt": "/local-payloads/" + operationID, "tasks.read": "/tasks/query"}[action]
 	method := http.MethodPost
+	if action == "repository.prepare" {
+		suffix = "/repositories/" + taskID + "/prepare"
+	}
 	if action == "tasks.cancel" {
 		suffix = "/tasks/" + taskID + "/cancel"
 	}
@@ -188,6 +196,19 @@ func (c *Client) mintAccessTicket(ctx context.Context, daemonID, operationID, ac
 		return AccessTicket{}, invalidResponse("data.target")
 	}
 	return result, nil
+}
+
+// AccessRepositoryPrepare binds a repository resource without putting branch
+// selectors in central metadata. It performs one guest request, never a retry.
+func (c *Client) AccessRepositoryPrepare(ctx context.Context, daemonID, repositoryID, operationID string, source io.Reader, destination io.Writer) error {
+	ticket, err := c.mintAccessTicket(ctx, daemonID, operationID, "repository.prepare", repositoryID)
+	if err != nil {
+		return err
+	}
+	u := *c.baseURL
+	u.Path = ticket.Data.GatewayPath
+	u.RawPath = ""
+	return c.relayContent(ctx, ticket.Data.Method, u.String(), ticket.Data.Ticket, source, destination)
 }
 
 // AccessContent obtains one v2 ticket, then streams once to the fixed edge path.
