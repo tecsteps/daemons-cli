@@ -67,6 +67,53 @@ func TestPushRequestUsesOnlyGuestSelectorsAndNeverRetriesAmbiguousAcknowledgemen
 	}
 }
 
+// A preparation the control plane refuses created nothing, so it must not be reported as
+// ambiguous: telling the engineer to check the list before retrying would be false, and exit 8
+// is the code that means "an attempt may exist". The budget, the authority fences and the
+// closed qualification gate all refuse before a request row exists.
+func TestPushRequestRefusedBeforeCreationIsNotAmbiguous(t *testing.T) {
+	for _, refusal := range []struct {
+		name   string
+		status int
+		code   string
+		want   int
+	}{
+		{name: "preparation budget", status: 429, code: "request_conflict", want: 7},
+		{name: "authority changed", status: 409, code: "stale_generation", want: 1},
+		{name: "protection unavailable", status: 503, code: "protection_unavailable", want: 1},
+		{name: "not the assignee", status: 403, code: "forbidden", want: 5},
+	} {
+		t.Run(refusal.name, func(t *testing.T) {
+			guestCalls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Daemons-Api-Version", "v1")
+				if r.URL.Path == "/api/v1" {
+					io.WriteString(w, `{"data":{"version":"v1","workspace_access":{"ticket_version":2}}}`)
+					return
+				}
+				if r.URL.Path == "/api/v1/daemons/"+pushDaemonUUID+"/access-tickets" {
+					w.WriteHeader(refusal.status)
+					io.WriteString(w, `{"code":"`+refusal.code+`"}`)
+					return
+				}
+				guestCalls++
+			}))
+			defer server.Close()
+			var out, stderr bytes.Buffer
+			code := Run(context.Background(), []string{"--host", server.URL, "push", "request", pushDaemonUUID, pushRequestUUID, "private-branch-canary"}, phaseOneDependencies(t, server.Client(), &out, &stderr))
+			if code != refusal.want || code == 8 {
+				t.Fatalf("code=%d want=%d error=%s", code, refusal.want, stderr.String())
+			}
+			if guestCalls != 0 {
+				t.Error("a refused ticket must never reach the guest")
+			}
+			if strings.Contains(out.String()+stderr.String(), "private-branch-canary") {
+				t.Error("the private selector escaped a refusal")
+			}
+		})
+	}
+}
+
 func pushFixture() client.RepositoryPush {
 	one := int64(1)
 	return client.RepositoryPush{RequestUUID: pushRequestUUID, AssignedSubjectUUID: pushDaemonUUID,
