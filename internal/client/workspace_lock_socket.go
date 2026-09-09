@@ -31,10 +31,33 @@ type LockTicket struct {
 	Meta map[string]any `json:"meta"`
 }
 
-// LockActionUnlock is the only lock action this Control Plane admits today.
-// Every other action in the contract is minted through the same route and is
-// refused until the control plane and gateway carry it.
+// LockActionUnlock is the engineer's own unlock. It is one of the lock-channel
+// actions this Control Plane admits; every other action in the contract is
+// minted through the same route and is refused until the platform carries it.
 const LockActionUnlock = "lock.unlock"
+
+// AdmittedLockActions are the lock-channel actions the platform mints today. An
+// action outside this set is a version gap and says so, rather than reporting a
+// denial the user could act on; an action inside it that is refused is a real
+// denial and keeps the Control Plane's own status.
+var AdmittedLockActions = []string{
+	LockActionUnlock,
+	"lock.organization.enroll",
+	"lock.organization.recover",
+	"lock.organization.rotate",
+	"lock.organization.replace",
+	"lock.handoff",
+	"lock.push_confirmation",
+}
+
+func lockActionAdmitted(action string) bool {
+	for _, admitted := range AdmittedLockActions {
+		if admitted == action {
+			return true
+		}
+	}
+	return false
+}
 
 // MintLockTicket admits one lock exchange. The action is closed and the
 // options carry only the protocol version.
@@ -65,7 +88,7 @@ func (c *Client) MintLockTicket(ctx context.Context, daemonID, operationID, acti
 // lockAdmissionError keeps an unsupported action honest. The contract requires
 // failing closed with upgrade guidance rather than degrading to another path.
 func lockAdmissionError(action string, err error) error {
-	if action == LockActionUnlock {
+	if lockActionAdmitted(action) {
 		return err
 	}
 	var apiError *errs.APIError

@@ -184,6 +184,8 @@ A grant lasts eight hours from verification with no sliding refresh, and it neve
 
 What the grant currently reaches: `daemons attach` answers the guest's device challenge with the stored grant, and refuses with `lock_device_required` (exit 5) when this device has none. Files, uploads and SSH still send only a Control Plane ticket, so on a protected workspace they stay denied by the guest until that wiring lands. Use `daemons unlock` on this device before the terminal, and expect the other access kinds to be refused rather than to fall back.
 
+The lock channel also carries the organization key actions and the assignee handoff. This CLI recognises them as admitted rather than reporting a version gap, but it does not drive them yet: the Owner performs organization enrollment, recovery, rotation and replacement in the browser, and the engineer's handoff and replacement authorization need the pending exchange the Control Plane does not hand to a CLI client yet.
+
 `daemons lock DAEMON` gives up this device's grant. When the Control Plane does not admit the guest-wide lock action yet, the request never reaches the guest, so the grant is kept and the refusal says so; every other outcome, including an uncertain one, drops the local grant.
 
 ### Terminal attach
