@@ -798,12 +798,17 @@ func approveWorkspaceHandoff(ctx context.Context, daemonArgument string, options
 		return err
 	}
 	scope := view.Data.Handoff
-	_, _, err = lock.exchange(ctx, "lock.handoff", client.NewLockOperationID(), device, false,
+	// The ticket is minted for the reassignment being approved, because the guest checks that
+	// the operation it was admitted under is the one the sealed scope names.
+	result, _, err := lock.exchange(ctx, "lock.handoff", scope.OperationUUID, device, false,
 		func(challenge client.LockChallenge) (map[string]any, error) {
 			return client.LockHandoffBody(secret, phrase, scope, challenge)
 		})
 	secret, phrase = "", ""
 	if err != nil {
+		return err
+	}
+	if err := client.ReadLockDecisionResult(result, "lock.handoff"); err != nil {
 		return err
 	}
 	if options.JSON {
@@ -846,12 +851,15 @@ func authorizeWorkspaceReplacement(ctx context.Context, daemonArgument string, o
 		return err
 	}
 	pending := view.Data.Replacement
-	_, _, err = lock.exchange(ctx, "lock.organization.replace", client.NewLockOperationID(), device, false,
+	result, _, err := lock.exchange(ctx, "lock.organization.replace", client.NewLockOperationID(), device, false,
 		func(client.LockChallenge) (map[string]any, error) {
 			return client.LockReplacementBody(secret, phrase, nonce, pending)
 		})
 	secret, phrase, nonce = "", "", ""
 	if err != nil {
+		return err
+	}
+	if err := client.ReadLockDecisionResult(result, "lock.organization.replace"); err != nil {
 		return err
 	}
 	if options.JSON {

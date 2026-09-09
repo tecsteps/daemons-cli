@@ -47,7 +47,8 @@ var AdmittedLockActions = []string{
 	"lock.organization.rotate",
 	"lock.organization.replace",
 	"lock.handoff",
-	"lock.push_confirmation",
+	// E23's push confirmation is deliberately not here. The frame must not be obtainable from
+	// the CLI, and this client offers no command that would mint one.
 }
 
 func lockActionAdmitted(action string) bool {

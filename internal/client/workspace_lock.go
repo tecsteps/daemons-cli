@@ -1230,3 +1230,24 @@ func lockEngineerFactor(secret LockSecret, phrase string) (map[string]any, error
 	}
 	return map[string]any{"credential_type": "pin", "secret": string(secret)}, nil
 }
+
+// ReadLockDecisionResult validates a decision response before the caller reports
+// anything. A sealed refusal is a refusal: `denied` never reads as success, and an
+// outcome the guest did not name is treated as one.
+func ReadLockDecisionResult(result map[string]any, action string) error {
+	outcome, ok := lockString(result, "outcome")
+	if !ok {
+		return LockDenied()
+	}
+	if outcome == "applied" || (action == "lock.organization.rotate" && outcome == "pending") {
+		return nil
+	}
+	if !lockExactKeys(result, "action", "operation_uuid", "outcome", "reason") {
+		return LockDenied()
+	}
+	reason, ok := lockString(result, "reason")
+	if !ok {
+		return LockDenied()
+	}
+	return lockOutcomeError(reason)
+}
