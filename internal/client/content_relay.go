@@ -138,6 +138,7 @@ type AccessTicket struct {
 		ExpiresIn   WireInt            `json:"expires_in"`
 		Method      string             `json:"method"`
 		GatewayPath string             `json:"gateway_path"`
+		Protocol    string             `json:"websocket_protocol"`
 		Target      LocalPayloadTarget `json:"target"`
 	} `json:"data"`
 	Meta map[string]any `json:"meta"`
@@ -192,6 +193,15 @@ func (c *Client) mintAccessTicket(ctx context.Context, daemonID, operationID, ac
 	if suffix == "" || result.Data.Version != 2 || result.Data.ExpiresIn < 1 || result.Data.ExpiresIn > 30 || result.Data.Method != method || result.Data.GatewayPath != "/v1/workspaces/"+daemonID+suffix {
 		return AccessTicket{}, invalidResponse("data.access_ticket")
 	}
+	switch result.Data.Protocol {
+	case "":
+	case FilesProtocolLabel:
+		if action != "files.read" && action != "files.download" && action != "files.upload" {
+			return AccessTicket{}, invalidResponse("data.access_ticket")
+		}
+	default:
+		return AccessTicket{}, invalidResponse("data.access_ticket")
+	}
 	if (strings.HasPrefix(action, "local_payload.") || action == "tasks.submit") && (!result.Data.Target.valid(daemonID) || !payloadUUID.MatchString(operationID)) {
 		return AccessTicket{}, invalidResponse("data.target")
 	}
@@ -216,6 +226,9 @@ func (c *Client) AccessContent(ctx context.Context, daemonID, operationID, actio
 	ticket, err := c.MintAccessTicket(ctx, daemonID, operationID, action)
 	if err != nil {
 		return err
+	}
+	if ticket.Data.Protocol == FilesProtocolLabel {
+		return c.accessFilesChannel(ctx, daemonID, action, ticket, source, destination)
 	}
 	u := *c.baseURL
 	u.Path = ticket.Data.GatewayPath

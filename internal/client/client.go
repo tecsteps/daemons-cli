@@ -17,17 +17,26 @@ const (
 )
 
 type Client struct {
-	baseURL     *url.URL
-	token       string
-	http        *http.Client
-	version     string
-	requestID   string
-	warningSink func(string)
-	warnings    map[string]struct{}
-	warningMu   sync.Mutex
-	preflightMu sync.Mutex
-	preflighted bool
-	accessV2    bool
+	baseURL      *url.URL
+	token        string
+	http         *http.Client
+	version      string
+	requestID    string
+	warningSink  func(string)
+	warnings     map[string]struct{}
+	warningMu    sync.Mutex
+	preflightMu  sync.Mutex
+	preflighted  bool
+	accessV2     bool
+	workingProof WorkingProof
+}
+
+// WorkingProof returns the callback that answers one guest lock_device_challenge
+// for a working-transport action. It is nil when this device holds no grant.
+type WorkingProof func(action string) (func(envelope string) (string, error), error)
+
+func (c *Client) SetWorkingProof(proof WorkingProof) {
+	c.workingProof = proof
 }
 
 type Option func(*Client)

@@ -82,6 +82,74 @@ func (g *lockGuest) rotateIdentity(t *testing.T) {
 	g.identity = identity
 }
 
+func (g *lockGuest) workingChallengeEnvelope(t *testing.T, action, resource string, lockEpoch int64) string {
+	t.Helper()
+	scheme := hpke.KEM_P256_HKDF_SHA256.Scheme()
+	recipientPublic, _, err := scheme.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientBytes, err := recipientPublic.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityBytes := elliptic.Marshal(elliptic.P256(), g.identity.PublicKey.X, g.identity.PublicKey.Y) //nolint:staticcheck
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	g.challenges++
+	challenge := map[string]any{
+		"version":                   int64(1),
+		"challenge_uuid":            fmt.Sprintf("88888888-8888-4888-8888-%012d", g.challenges),
+		"organization_uuid":         lockTestOrgUUID,
+		"workspace_uuid":            lockTestWorkspace,
+		"assignment_generation":     g.generation,
+		"boot_uuid":                 lockTestBootUUID,
+		"lock_epoch":                lockEpoch,
+		"credential_revision":       int64(1),
+		"lease_uuid":                lockTestLease,
+		"authority_epoch":           int64(1),
+		"operation_uuid":            fmt.Sprintf("99999999-9999-4999-8999-%012d", g.challenges),
+		"action":                    action,
+		"resource_uuid":             resource,
+		"nonce":                     armor(nonce),
+		"expires_at":                g.nowMs + 20000,
+		"identity_public_key":       armor(identityBytes),
+		"recipient_public_key":      armor(recipientBytes),
+		"actor_subject_uuid":        lockTestSubject,
+		"membership_uuid":           lockTestMembership,
+		"policy_revision":           int64(1),
+		"organization_key_revision": int64(1),
+		"hold_revision":             int64(0),
+		"versions": map[string]any{
+			"authorization_version":    int64(1),
+			"workspace_access_version": int64(1),
+			"placement_generation":     int64(1),
+			"assignment_generation":    g.generation,
+			"lifecycle_revision":       int64(1),
+			"host_generation":          int64(1),
+		},
+	}
+	canonicalChallenge := canonical(challenge)
+	digest := sha256.Sum256(append([]byte("dr.workspace-lock.challenge.v1\x00"), canonicalChallenge...))
+	r, s, err := ecdsa.Sign(rand.Reader, g.identity, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := make([]byte, 64)
+	r.FillBytes(signature[:32])
+	s.FillBytes(signature[32:])
+	frame := canonical(map[string]any{
+		"version": int64(1), "challenge": challenge, "signature": armor(signature),
+	})
+	envelope, err := json.Marshal(map[string]string{"type": "lock_device_challenge", "frame": frame})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(envelope)
+}
+
 // canonical is an independent RFC 8785 serializer for the closed lock schemas.
 func canonical(value any) string {
 	switch typed := value.(type) {

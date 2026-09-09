@@ -28,6 +28,7 @@ func recoverUploads(ctx context.Context, arguments []string, options globalOptio
 	if err != nil {
 		return runResultFor(err)
 	}
+	api = withWorkingProof(api, daemonID, options, dependencies)
 	staging, err := uploadStaging(options, dependencies, daemonID)
 	if err != nil {
 		return runResultFor(err)

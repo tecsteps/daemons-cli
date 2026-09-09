@@ -182,7 +182,7 @@ A grant lasts eight hours from verification with no sliding refresh, and it neve
 
 `lock status` reports what this device knows. Guest state is shown as `unknown` unless the guest itself reported it: it is never inferred from Control Plane metadata.
 
-What the grant currently reaches: `daemons attach` answers the guest's device challenge with the stored grant, and refuses with `lock_device_required` (exit 5) when this device has none. Files, uploads and SSH still send only a Control Plane ticket, so on a protected workspace they stay denied by the guest until that wiring lands. Use `daemons unlock` on this device before the terminal, and expect the other access kinds to be refused rather than to fall back.
+What the grant currently reaches: `daemons attach`, `daemons files`, `daemons upload`, `daemons download` and `daemons ssh-proxy` answer the guest's device challenge with the stored grant, and refuse with `lock_device_required` (exit 5) when this device has none. Unlock first on a protected workspace. Owner organization actions stay in the browser.
 
 ```sh
 daemons lock exchanges DAEMON              # what is waiting for you on this workspace

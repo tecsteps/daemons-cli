@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/tecsteps/daemons-cli/internal/client"
+	"github.com/tecsteps/daemons-cli/internal/errs"
 )
 
 type blockingSSHInput struct {
@@ -82,6 +86,8 @@ func TestRelaySSHExitsAndClosesStdoutWhenGatewayCloses(t *testing.T) {
 			"ws"+strings.TrimPrefix(server.URL, "http"),
 			"ticket",
 			Dependencies{Input: input, Output: output, ErrorOutput: &bytes.Buffer{}},
+			nil,
+			nil,
 		)
 	}()
 
@@ -102,5 +108,118 @@ func TestRelaySSHExitsAndClosesStdoutWhenGatewayCloses(t *testing.T) {
 	}
 	if !bytes.Equal(output.Bytes(), payload) {
 		t.Fatalf("relay output length = %d, want %d", output.Len(), len(payload))
+	}
+}
+
+func TestRelaySSHAnswersALockDeviceChallengeBeforeReady(t *testing.T) {
+	proofs := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept websocket: %v", err)
+			return
+		}
+		defer connection.CloseNow()
+		challenge := `{"type":"lock_device_challenge","frame":"{\"challenge_uuid\":\"synthetic\"}"}`
+		if err := connection.Write(r.Context(), websocket.MessageText, []byte(challenge)); err != nil {
+			return
+		}
+		_, payload, err := connection.Read(r.Context())
+		if err != nil {
+			return
+		}
+		proofs <- string(payload)
+		if err := connection.Write(r.Context(), websocket.MessageText, []byte(sshControlReady)); err != nil {
+			return
+		}
+		_ = connection.Close(websocket.StatusNormalClosure, "")
+	}))
+	defer server.Close()
+
+	err := relaySSH(
+		context.Background(),
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		"ticket",
+		Dependencies{Input: bytes.NewReader(nil), Output: io.Discard, ErrorOutput: &bytes.Buffer{}},
+		func(envelope string) (string, error) {
+			if !client.IsLockDeviceChallenge([]byte(envelope)) {
+				t.Fatalf("responder saw %q", envelope)
+			}
+			return `{"type":"lock_device_proof","proof":{"device_session_uuid":"synthetic","challenge_uuid":"synthetic","signature":"c2ln"}}`, nil
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("relaySSH() error = %v", err)
+	}
+	select {
+	case proof := <-proofs:
+		if !strings.Contains(proof, "lock_device_proof") {
+			t.Fatalf("gateway received %q", proof)
+		}
+	default:
+		t.Fatal("no proof reached the gateway")
+	}
+}
+
+func TestRelaySSHRefusesAProtectedWorkspaceWithoutAGrant(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept websocket: %v", err)
+			return
+		}
+		defer connection.CloseNow()
+		_ = connection.Write(r.Context(), websocket.MessageText, []byte(`{"type":"lock_device_challenge","frame":"{}"}`))
+		_, _, _ = connection.Read(r.Context())
+	}))
+	defer server.Close()
+
+	err := relaySSH(
+		context.Background(),
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		"ticket",
+		Dependencies{Input: bytes.NewReader(nil), Output: io.Discard, ErrorOutput: &bytes.Buffer{}},
+		nil,
+		nil,
+	)
+	if errs.Code(err) != "lock_device_required" || errs.ExitCode(err) != 5 {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRelaySSHSurfacesAStaleGrantWithoutSendingAProof(t *testing.T) {
+	proofs := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept websocket: %v", err)
+			return
+		}
+		defer connection.CloseNow()
+		_ = connection.Write(r.Context(), websocket.MessageText, []byte(`{"type":"lock_device_challenge","frame":"{}"}`))
+		_, payload, err := connection.Read(r.Context())
+		if err == nil {
+			proofs <- string(payload)
+		}
+	}))
+	defer server.Close()
+
+	expired := errs.New("lock_session_expired", "The device session expired. Unlock again.", 5)
+	err := relaySSH(
+		context.Background(),
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		"ticket",
+		Dependencies{Input: bytes.NewReader(nil), Output: io.Discard, ErrorOutput: &bytes.Buffer{}},
+		func(string) (string, error) { return "", expired },
+		nil,
+	)
+	if !errors.Is(err, expired) {
+		t.Fatalf("error = %v", err)
+	}
+	select {
+	case proof := <-proofs:
+		t.Fatalf("stale grant still sent %q", proof)
+	default:
 	}
 }

@@ -170,15 +170,15 @@ func TestAttachSurfacesAResponderFailureWithoutSendingAProof(t *testing.T) {
 
 func TestOnlyALockDeviceChallengeReachesTheResponder(t *testing.T) {
 	for _, payload := range []string{`{"type":"session_required"}`, `not json`, ``, `{"type":"lock_device_proof"}`} {
-		if isLockDeviceChallenge([]byte(payload)) {
+		if client.IsLockDeviceChallenge([]byte(payload)) {
 			t.Fatalf("%q was treated as a challenge", payload)
 		}
 	}
-	if !isLockDeviceChallenge([]byte(`{"type":"lock_device_challenge","frame":"{}"}`)) {
+	if !client.IsLockDeviceChallenge([]byte(`{"type":"lock_device_challenge","frame":"{}"}`)) {
 		t.Fatal("a real challenge was not recognised")
 	}
 	oversized := make([]byte, client.LockEnvelopeLimit+1)
-	if isLockDeviceChallenge(oversized) {
+	if client.IsLockDeviceChallenge(oversized) {
 		t.Fatal("an oversized envelope was accepted")
 	}
 }

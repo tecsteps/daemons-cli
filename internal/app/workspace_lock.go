@@ -171,6 +171,13 @@ func lockResponder(daemonID, action, resourceUUID string, options globalOptions,
 	}, nil
 }
 
+func withWorkingProof(api *client.Client, daemonID string, options globalOptions, dependencies Dependencies) *client.Client {
+	api.SetWorkingProof(func(action string) (func(string) (string, error), error) {
+		return lockResponder(daemonID, action, daemonID, options, dependencies)
+	})
+	return api
+}
+
 func workspaceLockStore(options globalOptions, environment map[string]string) (credentials.LockStore, error) {
 	if configured := environment["DAEMONS_WORKSPACE_LOCK_FILE"]; configured != "" {
 		return credentials.LockStore{Path: configured}, nil

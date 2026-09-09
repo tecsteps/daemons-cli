@@ -49,6 +49,7 @@ func uploadFiles(ctx context.Context, arguments []string, options globalOptions,
 		err := errs.New("daemon_not_running", "The daemon is not running. Start it before uploading.", 1)
 		return reportUploadFailure(options, dependencies, len(files), err)
 	}
+	api = withWorkingProof(api, daemon.ID, options, dependencies)
 	staging, err := uploadStaging(options, dependencies, daemon.ID)
 	if err != nil {
 		return reportUploadFailure(options, dependencies, len(files), err)

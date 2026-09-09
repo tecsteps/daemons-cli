@@ -85,6 +85,7 @@ func listFiles(ctx context.Context, arguments []string, options globalOptions, d
 	if err != nil {
 		return err
 	}
+	api = withWorkingProof(api, daemonID, options, dependencies)
 
 	writer := tabwriter.NewWriter(dependencies.Output, 0, 4, 2, ' ', 0)
 	if err := api.Preflight(ctx); err != nil {
@@ -181,6 +182,7 @@ func downloadFile(ctx context.Context, arguments []string, options globalOptions
 	if err != nil {
 		return err
 	}
+	api = withWorkingProof(api, daemonID, options, dependencies)
 	if err := api.DownloadFile(ctx, daemonID, workspacePath, temporary); err != nil {
 		return err
 	}

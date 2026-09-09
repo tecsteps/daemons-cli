@@ -1156,6 +1156,25 @@ func (a LockDeviceAuthority) RespondToLockDeviceChallenge(envelopeText, action, 
 	return string(reply), nil
 }
 
+// IsLockDeviceChallenge recognises the guest's proof request without trusting
+// its content: the envelope itself is validated where the proof is signed.
+func IsLockDeviceChallenge(payload []byte) bool {
+	if len(payload) == 0 || len(payload) > LockEnvelopeLimit {
+		return false
+	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(payload, &envelope) == nil && envelope.Type == "lock_device_challenge"
+}
+
+// LockDeviceRequired is the working-transport refusal when a protected
+// workspace challenges a device that has no live grant.
+func LockDeviceRequired() error {
+	return errs.New("lock_device_required",
+		"This workspace is protected. Run daemons unlock DAEMON on this device first.", 5)
+}
+
 // LockHandoffBody approves a reassignment with the engineer's own factor. Every
 // scope field comes from the Control Plane's view of the operation that exists,
 // never from the user, so the guest and the client bind the same reassignment.

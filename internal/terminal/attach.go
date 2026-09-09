@@ -228,10 +228,9 @@ func Run(ctx context.Context, connection *websocket.Conn, streams Streams) Outco
 					return Outcome{ExitCode: 9}
 				}
 			}
-			if message.messageType == websocket.MessageText && isLockDeviceChallenge(message.payload) {
+			if message.messageType == websocket.MessageText && client.IsLockDeviceChallenge(message.payload) {
 				if streams.Lock == nil {
-					err := errs.New("lock_device_required",
-						"This workspace is protected. Run daemons unlock DAEMON on this device first.", 5)
+					err := client.LockDeviceRequired()
 					connection.Close(websocket.StatusNormalClosure, "lock_required")
 					return Outcome{ExitCode: 5, LockError: err}
 				}
@@ -280,18 +279,6 @@ func Run(ctx context.Context, connection *websocket.Conn, streams Streams) Outco
 			return Outcome{ExitCode: 1}
 		}
 	}
-}
-
-// isLockDeviceChallenge recognises the guest's proof request without trusting
-// its content: the envelope itself is validated where the proof is signed.
-func isLockDeviceChallenge(payload []byte) bool {
-	if len(payload) == 0 || len(payload) > client.LockEnvelopeLimit {
-		return false
-	}
-	var envelope struct {
-		Type string `json:"type"`
-	}
-	return json.Unmarshal(payload, &envelope) == nil && envelope.Type == "lock_device_challenge"
 }
 
 func localPrefix(input []byte, pending bool) ([]byte, bool, bool) {

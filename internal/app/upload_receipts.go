@@ -24,6 +24,7 @@ func uploadReceipt(ctx context.Context, arguments []string, options globalOption
 	if err != nil {
 		return runResultFor(err)
 	}
+	api = withWorkingProof(api, daemonID, options, dependencies)
 	receipt, err := api.GetUploadReceipt(ctx, daemonID, arguments[1])
 	if err != nil {
 		return runResultFor(err)

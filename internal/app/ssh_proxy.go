@@ -42,7 +42,15 @@ func sshProxy(ctx context.Context, args []string, opt globalOptions, d Dependenc
 	if e = api.ValidateGatewayURL(gateway); e != nil {
 		return runResultFor(e)
 	}
-	if e = relaySSH(ctx, gateway, ticket.Data.Ticket, d); e != nil {
+	prove, e := lockResponder(args[0], "ssh.connect", args[0], opt, d)
+	if e != nil {
+		return runResultFor(e)
+	}
+	if e = relaySSH(ctx, gateway, ticket.Data.Ticket, d, prove, api.GatewayHTTPClient()); e != nil {
+		var cli *errs.CLIError
+		if errors.As(e, &cli) {
+			return runResultFor(e)
+		}
 		code := 1
 		if errors.Is(e, errAdmission) {
 			code = sshAdmissionRefusedExit
@@ -54,12 +62,62 @@ func sshProxy(ctx context.Context, args []string, opt globalOptions, d Dependenc
 
 var errAdmission = errors.New("SSH gateway refused admission")
 
-func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies) error {
+func admitSSH(ctx context.Context, ws *websocket.Conn, prove func(string) (string, error)) (bool, error) {
+	sawChallenge := false
+	for {
+		typ, data, err := ws.Read(ctx)
+		if err != nil {
+			if websocket.CloseStatus(err) == 4403 {
+				if sawChallenge && prove == nil {
+					return false, client.LockDeviceRequired()
+				}
+				return false, errAdmission
+			}
+			return false, fmt.Errorf("read SSH admission: %w", err)
+		}
+		if typ != websocket.MessageText {
+			return false, errors.New("gateway sent bytes before ready")
+		}
+		if client.IsLockDeviceChallenge(data) {
+			sawChallenge = true
+			if prove == nil {
+				return false, client.LockDeviceRequired()
+			}
+			reply, err := prove(string(data))
+			if err != nil {
+				return false, err
+			}
+			if err := ws.Write(ctx, websocket.MessageText, []byte(reply)); err != nil {
+				return false, fmt.Errorf("write SSH device proof: %w", err)
+			}
+			continue
+		}
+		var frame struct {
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(data, &frame) != nil {
+			return false, errors.New("invalid SSH gateway control frame")
+		}
+		if frame.Type == "error" {
+			return false, errAdmission
+		}
+		if string(data) != sshControlReady || frame.Type != "ready" {
+			return false, errors.New("gateway did not send ready control frame")
+		}
+		return true, nil
+	}
+}
+
+func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies, prove func(string) (string, error), httpClient *http.Client) error {
 	if ticket == "" {
 		return errors.New("missing SSH ticket")
 	}
-	hc := &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}, CheckRedirect: client.RejectGatewayRedirect}
-	ws, resp, e := websocket.Dial(ctx, gateway, &websocket.DialOptions{HTTPClient: hc, Subprotocols: []string{"dr." + ticket}, CompressionMode: websocket.CompressionDisabled})
+	if httpClient == nil {
+		httpClient = &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}, CheckRedirect: client.RejectGatewayRedirect}
+	}
+	ws, resp, e := websocket.Dial(ctx, gateway, &websocket.DialOptions{HTTPClient: httpClient, Subprotocols: []string{"dr." + ticket}, CompressionMode: websocket.CompressionDisabled})
 	if e != nil {
 		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
 			return errAdmission
@@ -71,28 +129,11 @@ func relaySSH(ctx context.Context, gateway, ticket string, d Dependencies) error
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
 	ws.SetReadLimit(sshMaxBinaryFrameBytes)
-	typ, data, e := ws.Read(ctx)
-	if e != nil {
-		if websocket.CloseStatus(e) == 4403 {
-			return errAdmission
-		}
-		return fmt.Errorf("read SSH admission: %w", e)
+	ready, err := admitSSH(ctx, ws, prove)
+	if err != nil {
+		return err
 	}
-	if typ != websocket.MessageText {
-		return errors.New("gateway sent bytes before ready")
-	}
-	var c struct {
-		Type    string `json:"type"`
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	}
-	if json.Unmarshal(data, &c) != nil {
-		return errors.New("invalid SSH gateway control frame")
-	}
-	if c.Type == "error" {
-		return errAdmission
-	}
-	if string(data) != sshControlReady || c.Type != "ready" {
+	if !ready {
 		return errors.New("gateway did not send ready control frame")
 	}
 	ctx, cancel := context.WithCancel(ctx)
