@@ -8,25 +8,40 @@ import (
 	"github.com/tecsteps/daemons-cli/internal/upload"
 )
 
+const uploadUsage = "Usage: daemons upload DAEMON PATH... [--force]"
+
 func uploadFiles(ctx context.Context, arguments []string, options globalOptions, dependencies Dependencies) runResult {
 	if helpRequested(arguments) {
-		fmt.Fprintln(dependencies.Output, "Usage: daemons upload DAEMON PATH...")
+		fmt.Fprintln(dependencies.Output, uploadUsage)
 		return runResult{}
 	}
-	if len(arguments) < 2 {
-		err := errs.New("usage_error", "Usage: daemons upload DAEMON PATH...", 2)
-		return reportUploadFailure(options, dependencies, max(0, len(arguments)-1), err)
+	operands := make([]string, 0, len(arguments))
+	force := false
+	for _, argument := range arguments {
+		if argument == "--force" {
+			force = true
+			continue
+		}
+		operands = append(operands, argument)
 	}
-	files, err := upload.Validate(arguments[1:], dependencies.Environment["HOME"])
+	if len(operands) < 2 {
+		err := errs.New("usage_error", uploadUsage, 2)
+		return reportUploadFailure(options, dependencies, max(0, len(operands)-1), err)
+	}
+	paths, err := workspacePaths(dependencies)
 	if err != nil {
-		return reportUploadFailure(options, dependencies, len(arguments)-1, err)
+		return reportUploadFailure(options, dependencies, len(operands)-1, err)
+	}
+	files, err := upload.Validate(operands[1:], dependencies.Environment["HOME"])
+	if err != nil {
+		return reportUploadFailure(options, dependencies, len(operands)-1, err)
 	}
 	defer upload.Close(files)
 	api, _, _, err := authenticatedClient(options, dependencies)
 	if err != nil {
 		return reportUploadFailure(options, dependencies, len(files), err)
 	}
-	daemon, err := api.ResolveDaemon(ctx, arguments[0])
+	daemon, err := api.ResolveDaemon(ctx, operands[0])
 	if err != nil {
 		return reportUploadFailure(options, dependencies, len(files), err)
 	}
@@ -34,8 +49,17 @@ func uploadFiles(ctx context.Context, arguments []string, options globalOptions,
 		err := errs.New("daemon_not_running", "The daemon is not running. Start it before uploading.", 1)
 		return reportUploadFailure(options, dependencies, len(files), err)
 	}
+	staging, err := uploadStaging(options, dependencies, daemon.ID)
+	if err != nil {
+		return reportUploadFailure(options, dependencies, len(files), err)
+	}
 
-	report, runErr := upload.Run(ctx, api, daemon.ID, files)
+	report, runErr := upload.Run(ctx, api, daemon.ID, files, upload.Options{
+		Paths:   paths,
+		Staging: &staging,
+		Now:     dependencies.Now,
+		Force:   force,
+	})
 	if options.JSON {
 		writeJSON(dependencies.Output, report)
 		return runResult{code: errs.ExitCode(runErr), err: runErr, reported: true}
@@ -46,6 +70,12 @@ func uploadFiles(ctx context.Context, arguments []string, options globalOptions,
 		}
 	}
 	return runResultFor(runErr)
+}
+
+// uploadStaging resolves the private record that keeps an interrupted upload's
+// identity recoverable without holding any file bytes.
+func uploadStaging(options globalOptions, dependencies Dependencies, daemonID string) (upload.Staging, error) {
+	return upload.OpenStaging(dependencies.Environment, options.CredentialsFile, daemonID)
 }
 
 func reportUploadFailure(options globalOptions, dependencies Dependencies, requested int, err error) runResult {

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tecsteps/daemons-cli/internal/client"
 	"github.com/tecsteps/daemons-cli/internal/errs"
@@ -17,8 +17,33 @@ import (
 const (
 	MaxFiles    = 10
 	MaxFileSize = 10 * 1024 * 1024
-	uploadRoot  = "/root/workspace/uploads"
+	// maximumCollisionPages bounds the pre-upload collision listing so a large
+	// upload folder can never turn one upload into an unbounded crawl.
+	maximumCollisionPages = 20
 )
+
+// Options carries the configurable guest layout, the local staging record and
+// the explicit overwrite consent for one upload run.
+type Options struct {
+	Paths   client.WorkspacePaths
+	Staging *Staging
+	Now     func() time.Time
+	Force   bool
+}
+
+func (o Options) paths() client.WorkspacePaths {
+	if len(o.Paths.Roots()) == 0 {
+		return client.DefaultWorkspacePaths()
+	}
+	return o.Paths
+}
+
+func (o Options) now() time.Time {
+	if o.Now == nil {
+		return time.Now()
+	}
+	return o.Now()
+}
 
 type OpenFile struct {
 	Index    int
@@ -37,6 +62,9 @@ type Problem struct {
 	Code        string `json:"code"`
 	Message     string `json:"message"`
 	FailedIndex int    `json:"failed_index"`
+	// Operation names the upload identity to resolve with daemons files recover
+	// or daemons files receipt. It is empty when no request was sent.
+	Operation string `json:"operation,omitempty"`
 }
 
 type Report struct {
@@ -102,33 +130,72 @@ func Close(files []OpenFile) {
 	}
 }
 
-func Run(ctx context.Context, api *client.Client, daemonID string, files []OpenFile) (Report, error) {
+func Run(ctx context.Context, api *client.Client, daemonID string, files []OpenFile, options Options) (Report, error) {
 	report := Report{}
 	report.Meta.Requested = len(files)
 	report.Data.Results = make([]Result, len(files))
 	for index := range report.Data.Results {
 		report.Data.Results[index] = Result{Index: index, Status: "not_attempted"}
 	}
+	paths := options.paths()
+	staging := options.Staging
+	if staging != nil {
+		recoverable, err := api.UploadRecoverable(ctx)
+		if err != nil {
+			report.Error = &Problem{Code: errs.Code(err), Message: errs.Redact(err.Error()), FailedIndex: 0}
+			return report, err
+		}
+		if !recoverable {
+			staging = nil
+		}
+	}
+
+	if !options.Force {
+		if err := assertNoOverwrite(ctx, api, daemonID, files, paths); err != nil {
+			report.Error = &Problem{Code: errs.Code(err), Message: errs.Redact(err.Error()), FailedIndex: 0}
+			return report, err
+		}
+	}
 
 	for _, local := range files {
-		response, err := api.Upload(ctx, daemonID, local.Filename, local.File)
+		operation := client.NewUploadOperationID()
+		selector, err := paths.UploadSelector(local.Filename)
+		if err == nil && staging != nil {
+			size := int64(0)
+			if info, statErr := local.File.Stat(); statErr == nil {
+				size = info.Size()
+			}
+			err = staging.Add(Pending{OperationUUID: operation, Selector: selector,
+				Filename: local.Filename, Bytes: size}, options.now())
+		}
+		var response client.UploadResponse
+		if err == nil {
+			response, err = api.UploadOperation(ctx, daemonID, operation, paths, local.Filename, local.File)
+		}
 		if err != nil {
 			status := "not_attempted"
 			if errs.ExitCode(err) == 8 {
 				status = "unknown"
+			} else if staging != nil {
+				// A definite refusal leaves nothing to recover.
+				_ = staging.Remove(operation)
 			}
 			report.Data.Results[local.Index].Status = status
 			report.Error = &Problem{
 				Code:        errs.Code(err),
 				Message:     errs.Redact(err.Error()),
 				FailedIndex: local.Index,
+				Operation:   operation,
 			}
 			return report, err
 		}
-		if !response.OK || !safeUploadPath(response.Path) {
+		if !response.OK || !paths.SafeUploadPath(response.Path) {
 			err := errs.New("unsafe_server_path", "The server returned an unsafe upload path.", 10)
-			report.Error = &Problem{Code: errs.Code(err), Message: errs.Redact(err.Error()), FailedIndex: local.Index}
+			report.Error = &Problem{Code: errs.Code(err), Message: errs.Redact(err.Error()), FailedIndex: local.Index, Operation: operation}
 			return report, err
+		}
+		if staging != nil {
+			_ = staging.Remove(operation)
 		}
 
 		report.Data.Results[local.Index] = Result{Index: local.Index, Status: "uploaded", Path: response.Path}
@@ -136,6 +203,38 @@ func Run(ctx context.Context, api *client.Client, daemonID string, files []OpenF
 	}
 
 	return report, nil
+}
+
+// assertNoOverwrite refuses silently replacing a workspace file. The listing is
+// a read; the upload itself is never attempted when consent is missing.
+func assertNoOverwrite(ctx context.Context, api *client.Client, daemonID string, files []OpenFile, paths client.WorkspacePaths) error {
+	wanted := make(map[string]bool, len(files))
+	for _, local := range files {
+		wanted[local.Filename] = true
+	}
+	cursor := ""
+	for page := 0; page < maximumCollisionPages; page++ {
+		listing, err := api.ListFiles(ctx, daemonID, paths.UploadFolder(), cursor, 200)
+		if err != nil {
+			if errs.ExitCode(err) == 4 {
+				// The upload folder does not exist yet, so nothing collides.
+				return nil
+			}
+			return err
+		}
+		for _, entry := range listing.Data {
+			if wanted[entry.Name] {
+				return errs.New("upload_overwrite_confirmation",
+					"Uploading would replace an existing workspace file. Rerun with --force to overwrite.", 6)
+			}
+		}
+		if listing.Meta.NextCursor == nil || *listing.Meta.NextCursor == "" {
+			return nil
+		}
+		cursor = *listing.Meta.NextCursor
+	}
+	return errs.New("upload_overwrite_confirmation",
+		"The upload folder is too large to check for collisions. Rerun with --force to overwrite.", 6)
 }
 
 func resolvePath(operand, home string) (string, error) {
@@ -158,14 +257,6 @@ func resolvePath(operand, home string) (string, error) {
 		return "", fmt.Errorf("Cannot resolve local file %s.", operand)
 	}
 	return filepath.Clean(absolute), nil
-}
-
-func safeUploadPath(value string) bool {
-	if value == "" || strings.ContainsAny(value, "\x00\r\n") {
-		return false
-	}
-	cleaned := path.Clean(value)
-	return cleaned == value && strings.HasPrefix(cleaned, uploadRoot+"/") && path.Base(cleaned) != "."
 }
 
 func IsMissing(err error) bool {
