@@ -45,6 +45,10 @@ Commands:
   files list DAEMON [PATH] [--cursor CURSOR] [--limit N] [--all]
   files download DAEMON PATH DESTINATION
   logs DAEMON --source agent|app|daemon|provisioning [--level LEVEL] [--cursor CURSOR] [--limit N]
+  unlock DAEMON [--trust-on-first-use]
+  lock DAEMON
+  lock status|setup|change|recover DAEMON
+  lock pair DAEMON [--forget]
   ssh enable|disable|keys ...
   ssh-config DAEMON [--identity PATH] [--remove]
   ide DAEMON --editor code|cursor|zed|jetbrains [--folder NAME] [--cached]
@@ -69,6 +73,11 @@ type Dependencies struct {
 	// OpenURL opens a safe verification or approval URL in the user's browser.
 	// Device login opens directly; confirmation flows first ask the user.
 	OpenURL func(string) error
+	// ReadSecret reads one factor without echoing it. Workspace lock PINs and
+	// recovery phrases have no other input path: no flag, environment variable
+	// or piped stdin carries them, so a non-interactive run refuses instead of
+	// falling back.
+	ReadSecret func(prompt string) (string, error)
 }
 
 type runResult struct {
@@ -154,6 +163,20 @@ func defaults(dependencies Dependencies) Dependencies {
 	}
 	if dependencies.OpenURL == nil {
 		dependencies.OpenURL = openBrowser
+	}
+	if dependencies.ReadSecret == nil {
+		dependencies.ReadSecret = func(prompt string) (string, error) {
+			if dependencies.Stdin == nil || !term.IsTerminal(int(dependencies.Stdin.Fd())) {
+				return "", errors.New("a hidden prompt needs a terminal")
+			}
+			fmt.Fprint(dependencies.ErrorOutput, prompt)
+			value, err := term.ReadPassword(int(dependencies.Stdin.Fd()))
+			fmt.Fprintln(dependencies.ErrorOutput)
+			if err != nil {
+				return "", err
+			}
+			return string(value), nil
+		}
 	}
 	if dependencies.NewIdempotencyKey == nil {
 		dependencies.NewIdempotencyKey = func() (string, error) {

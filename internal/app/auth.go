@@ -203,6 +203,14 @@ func logout(ctx context.Context, arguments []string, options globalOptions, depe
 			return errs.New("credential_delete_failed", "The token was revoked, but the local credential file could not be removed.", 1)
 		}
 	}
+	// A workspace lock device grant must not outlive the session that
+	// established it, so logout removes every pin and grant for this host even
+	// when the token came from the environment.
+	if lockStore, lockErr := workspaceLockStore(options, dependencies.Environment); lockErr == nil {
+		if err := lockStore.Forget(normalized); err != nil {
+			return errs.New("lock_store_unavailable", "The token was revoked, but the workspace lock device store could not be cleared.", 1)
+		}
+	}
 	if options.JSON {
 		writeJSON(dependencies.Output, map[string]any{"data": map[string]any{"revoked": true}, "meta": map[string]any{}})
 	} else if usedEnvironmentToken {

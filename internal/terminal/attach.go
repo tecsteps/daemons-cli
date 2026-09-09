@@ -35,12 +35,25 @@ type Streams struct {
 	Output  io.Writer
 	Resize  <-chan Size
 	Signals <-chan os.Signal
+	// Lock answers a guest lock_device_challenge with the proof envelope for
+	// this device's live grant. It is nil when no grant is stored, which is the
+	// correct state for an open workspace and a definite refusal for a
+	// protected one: the CLI never guesses a proof it cannot sign.
+	Lock LockResponder
 }
+
+// LockResponder turns a lock_device_challenge envelope into a lock_device_proof
+// envelope. It returns an error the caller surfaces verbatim, never a partial
+// or an empty reply.
+type LockResponder func(envelope string) (string, error)
 
 type Outcome struct {
 	ExitCode int
 	Detached bool
 	Replaced bool
+	// LockError carries the reason a protected workspace refused this attach,
+	// so the caller reports the lock code rather than a generic close.
+	LockError error
 }
 
 func Connect(
@@ -215,6 +228,22 @@ func Run(ctx context.Context, connection *websocket.Conn, streams Streams) Outco
 					return Outcome{ExitCode: 9}
 				}
 			}
+			if message.messageType == websocket.MessageText && isLockDeviceChallenge(message.payload) {
+				if streams.Lock == nil {
+					err := errs.New("lock_device_required",
+						"This workspace is protected. Run daemons unlock DAEMON on this device first.", 5)
+					connection.Close(websocket.StatusNormalClosure, "lock_required")
+					return Outcome{ExitCode: 5, LockError: err}
+				}
+				reply, err := streams.Lock(string(message.payload))
+				if err != nil {
+					connection.Close(websocket.StatusNormalClosure, "lock_required")
+					return Outcome{ExitCode: errs.ExitCode(err), LockError: err}
+				}
+				if err := connection.Write(ctx, websocket.MessageText, []byte(reply)); err != nil {
+					return outcomeForSocketError(err)
+				}
+			}
 
 		case input := <-inputMessages:
 			if len(input.payload) > 0 {
@@ -251,6 +280,18 @@ func Run(ctx context.Context, connection *websocket.Conn, streams Streams) Outco
 			return Outcome{ExitCode: 1}
 		}
 	}
+}
+
+// isLockDeviceChallenge recognises the guest's proof request without trusting
+// its content: the envelope itself is validated where the proof is signed.
+func isLockDeviceChallenge(payload []byte) bool {
+	if len(payload) == 0 || len(payload) > client.LockEnvelopeLimit {
+		return false
+	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(payload, &envelope) == nil && envelope.Type == "lock_device_challenge"
 }
 
 func localPrefix(input []byte, pending bool) ([]byte, bool, bool) {

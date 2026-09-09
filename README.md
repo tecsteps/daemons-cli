@@ -162,6 +162,40 @@ When a mutation's outcome cannot be determined (a transport failure after dispat
 
 Credentials live in an owner-only file (`~/.config/daemons/credentials.json`, or `DAEMONS_CREDENTIALS_FILE`) keyed by normalized host, so logging in to a second `--host` never overwrites the first. Without `--host` or `DAEMONS_HOST` the CLI uses the production host when it has a credential, otherwise the only stored host; two or more non-production hosts require an explicit `--host`. `daemons logout` revokes and removes only the current host's credential. A credential file from an older release is migrated on the next login.
 
+### Workspace lock
+
+A protected workspace refuses every access kind until the guest itself verifies a PIN. That verification is not a Control Plane check: `daemons unlock DAEMON` opens a finite encrypted exchange straight to the guest, and no PIN, verifier, recovery phrase or device proof reaches daemons.run at any point.
+
+```sh
+daemons lock pair DAEMON        # compare and pin the guest identity
+daemons unlock DAEMON           # hidden PIN prompt, installs an 8 hour device grant
+daemons lock status DAEMON
+daemons lock DAEMON             # give up this device's grant
+daemons lock setup|change|recover DAEMON
+```
+
+Secrets are typed at a hidden prompt and nowhere else. There is deliberately no flag, environment variable or piped stdin that carries a PIN or a recovery phrase, naming one (`--pin`, `--secret`, ...) is a usage error, and a non-interactive run refuses with exit 2 rather than falling back.
+
+`lock pair` shows the guest's public identity pin so it can be compared with an already trusted device before anything is committed to it; the probe sends no request frame. `unlock --trust-on-first-use` accepts the offered identity without that comparison and says so: it is a disclosed bootstrap, not a verified pairing. A changed identity always fails closed with `lock_identity_changed` and needs an explicit `lock pair`.
+
+A grant lasts eight hours from verification with no sliding refresh, and it never survives a guest reboot, an explicit lock, a PIN change, a recovery or a reassignment. It lives in an owner-only 0600 file (`~/.config/daemons/workspace-lock.json`, or `DAEMONS_WORKSPACE_LOCK_FILE`) holding the public identity pin and, while the grant is live, the device signing key; `daemons logout` and `daemons lock pair --forget` remove it. The PIN itself is never written there.
+
+`lock status` reports what this device knows. Guest state is shown as `unknown` unless the guest itself reported it: it is never inferred from Control Plane metadata.
+
+What the grant currently reaches: `daemons attach` answers the guest's device challenge with the stored grant, and refuses with `lock_device_required` (exit 5) when this device has none. Files, uploads and SSH still send only a Control Plane ticket, so on a protected workspace they stay denied by the guest until that wiring lands. Use `daemons unlock` on this device before the terminal, and expect the other access kinds to be refused rather than to fall back.
+
+```sh
+daemons lock exchanges DAEMON              # what is waiting for you on this workspace
+daemons lock handoff DAEMON                # approve the reassignment with your own factor
+daemons lock authorize-replacement DAEMON  # authorize the Owner's organization key replacement
+```
+
+The engineer's two lock-channel decisions are driven here. `lock exchanges` reads what the platform is waiting on, and each command binds the exchange the platform actually issued: the handoff scope comes from the reassignment operation that exists and is checked against the guest's own verified challenge, so a substituted workspace or a stale generation is refused rather than approved. `authorize-replacement` additionally asks for the confirmation code the Owner reads out: the Control Plane never carries it, which is what makes the authorization an agreement with the Owner rather than with the platform.
+
+The Owner organization actions (enroll, recover, rotate, and staging a replacement) stay in the browser in v1: they need a password entered by the Owner, and this CLI does not offer one.
+
+`daemons lock DAEMON` gives up this device's grant. When the Control Plane does not admit the guest-wide lock action yet, the request never reaches the guest, so the grant is kept and the refusal says so; every other outcome, including an uncertain one, drops the local grant.
+
 ### Terminal attach
 
 `daemons attach DAEMON [--session NAME]` requires the ticket to advertise the `takeover_v1` terminal feature; if the Control Plane does not, attach refuses (exit 2) before connecting instead of guessing at the gateway's behaviour. Raw terminal mode is restored on every exit path, including a panic.
