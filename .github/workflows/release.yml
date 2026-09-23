@@ -74,6 +74,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Set up npm Trusted Publishing support
+        run: npm install --global npm@latest
+
       - name: Run macOS smoke tests
         run: go test ./...
 
@@ -206,16 +209,9 @@ jobs:
 
       - name: Publish npm packages
         env:
-          NPM_TOKEN: ${{ secrets.NPMJS_ACCESS_TOKEN }}
           VERSION: ${{ github.ref_name }}
         shell: bash
         run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo 'The NPMJS_ACCESS_TOKEN repository secret is required to publish daemonsrun.' >&2
-            exit 1
-          fi
-          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/.npmrc"
-          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc"
           npm_version="${VERSION#v}"
           for package in npm/platforms/*; do
             package_name="$(node -p "require('./' + process.argv[1]).name" "$package/package.json")"
