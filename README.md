@@ -158,7 +158,7 @@ When a mutation's outcome cannot be determined (a transport failure after dispat
 
 ### Authentication and credentials
 
-`daemons login` runs the device flow. `daemons login --token-stdin` reads an existing Control Plane token from stdin instead (one line), verifies it with `GET /api/v1/me`, and stores it; a token is never accepted as an argument and never echoed. `DAEMONS_TOKEN` in the environment overrides the store for CI and is never written to disk.
+`daemons login` opens the device flow. It prints the verification link and a user code to compare in the browser. The polling secret stays in memory and is never printed, including with `--json`. `daemons login --token-stdin` reads an existing Control Plane token from stdin instead (one line), verifies it with `GET /api/v1/me`, and stores it; a token is never accepted as an argument and never echoed. `DAEMONS_TOKEN` in the environment overrides the store for CI and is never written to disk.
 
 Credentials live in an owner-only file (`~/.config/daemons/credentials.json`, or `DAEMONS_CREDENTIALS_FILE`) keyed by normalized host, so logging in to a second `--host` never overwrites the first. Without `--host` or `DAEMONS_HOST` the CLI uses the production host when it has a credential, otherwise the only stored host; two or more non-production hosts require an explicit `--host`. `daemons logout` revokes and removes only the current host's credential. A credential file from an older release is migrated on the next login.
 
@@ -206,11 +206,17 @@ Enable SSH with a locally held identity (only its adjacent `.pub` file is read):
 
 ```sh
 daemons ssh enable DAEMON --identity ~/.ssh/id_ed25519 --wait
+daemons ssh DAEMON
 daemons ssh-config DAEMON --identity ~/.ssh/id_ed25519
+daemons sync push DAEMON ./project --dry-run
+daemons sync push DAEMON ./project
+daemons sync pull DAEMON ./restored-project
 daemons ide DAEMON --editor code
 ```
 
-`ssh-config` writes private, managed OpenSSH files below `~/.ssh/daemons-run/` and adds one marked `Include` to `~/.ssh/config`; it never copies a private key or stores tickets. `daemons ssh keys list DAEMON` lists fingerprints, `ssh keys remove DAEMON FINGERPRINT` removes one key, and `ssh disable DAEMON` removes SSH access. `ide --cached` uses the saved config but every new SSH transport still mints a fresh ticket and needs a current login. The proxy sends only SSH bytes on stdout; diagnostics stay on stderr.
+`ssh` opens an interactive shell as `dr-agent`. `ssh-config` writes private, managed OpenSSH files below `~/.ssh/daemons-run/` and adds one marked `Include` to `~/.ssh/config`; its `ProxyCommand` and `KnownHostsCommand` use the published `daemonsrun` package. The CLI pins the guest's ed25519 host key locally and refuses a changed key. It never copies a private key or stores tickets. `daemons ssh-known-hosts DAEMON` prints the single pinned OpenSSH line; `daemons ssh-proxy DAEMON` carries only SSH bytes on stdout. Both are intended for OpenSSH, with diagnostics on stderr. `daemons ssh keys list DAEMON` lists fingerprints, `ssh keys remove DAEMON FINGERPRINT` removes one key, and `ssh disable DAEMON` removes SSH access. `ide --cached` uses the saved config but every new SSH transport still mints a fresh ticket and needs a current login.
+
+`sync push|pull DAEMON LOCAL-FOLDER` transfers folder contents through the same gateway with rsync. The default remote folder is `workspace/default` under `dr-agent`'s home. Optional flags are `--remote RELATIVE-PATH`, `--identity PRIVATE-KEY-FILE`, `--dry-run`, and `--delete`. Transfers read `.gitignore` files and exclude `node_modules/` and `vendor/` at every depth. The default is additive; `--delete` explicitly removes destination-only files. `--dry-run` itemizes the planned changes.
 
 ### Exit codes
 

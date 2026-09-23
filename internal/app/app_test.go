@@ -31,8 +31,18 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 			json.NewDecoder(request.Body).Decode(&body)
 			requestedScopes <- body.Scopes
 			writer.WriteHeader(http.StatusCreated)
-			io.WriteString(writer, `{"data":{"device_code":"DEVICE-CODE","verification_url":"https://example.test/approve","expires_at":"2030-01-01T00:00:00Z","interval_seconds":5},"meta":[]}`)
-		case "/api/v1/device-authorizations/DEVICE-CODE":
+			io.WriteString(writer, `{"data":{"device_code":"DEVICE-CODE","user_code":"USER-CODE","verification_url":"https://example.test/approve","expires_at":"2030-01-01T00:00:00Z","interval_seconds":5},"meta":[]}`)
+		case "/api/v1/device-authorizations/token":
+			if request.Method != http.MethodPost {
+				t.Errorf("poll method = %s", request.Method)
+			}
+			var poll struct {
+				DeviceCode string `json:"device_code"`
+			}
+			_ = json.NewDecoder(request.Body).Decode(&poll)
+			if poll.DeviceCode != "DEVICE-CODE" {
+				t.Errorf("poll code = %q", poll.DeviceCode)
+			}
 			io.WriteString(writer, `{"data":{"status":"approved","access_token":"dr_cp_login_token","token_type":"Bearer"},"meta":[]}`)
 		case "/api/v1/me":
 			if request.Header.Get("Authorization") != "Bearer dr_cp_login_token" {
@@ -80,7 +90,7 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 	if code := Run(context.Background(), append(baseArguments, "login"), dependencies); code != 0 {
 		t.Fatalf("login exit = %d, stderr = %s", code, errorOutput.String())
 	}
-	if strings.Contains(output.String(), "dr_cp_login_token") {
+	if strings.Contains(output.String(), "dr_cp_login_token") || strings.Contains(output.String(), "DEVICE-CODE") || !strings.Contains(output.String(), "USER-CODE") {
 		t.Fatal("login output exposed the token")
 	}
 	credential, err := (credentials.Store{Path: credentialPath}).Load(normalizedHost(t, server.URL))
@@ -90,7 +100,7 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 	if credential.Token != "dr_cp_login_token" || credential.AccountEmail != "developer@example.test" {
 		t.Fatalf("credential = %#v", credential)
 	}
-	if scopes := <-requestedScopes; !slices.Equal(scopes, defaultScopes) || len(scopes) != 16 {
+	if scopes := <-requestedScopes; !slices.Equal(scopes, defaultScopes) || len(scopes) != 15 {
 		t.Fatalf("default scopes = %#v", scopes)
 	}
 	if !slices.Equal(opened, []string{"https://example.test/approve"}) || !strings.Contains(output.String(), "https://example.test/approve") {
@@ -180,13 +190,17 @@ func TestLoginDeviceFlowPolling(t *testing.T) {
 				switch request.URL.Path {
 				case "/api/v1/device-authorizations":
 					writer.WriteHeader(http.StatusCreated)
-					fmt.Fprintf(writer, `{"data":{"device_code":"DEVICE-CODE","verification_url":"https://example.test/approve","expires_at":"%s","interval_seconds":5},"meta":[]}`, test.expiresAt)
-				case "/api/v1/device-authorizations/DEVICE-CODE":
+					fmt.Fprintf(writer, `{"data":{"device_code":"DEVICE-CODE","user_code":"USER-CODE","verification_url":"https://example.test/approve","expires_at":"%s","interval_seconds":5},"meta":[]}`, test.expiresAt)
+				case "/api/v1/device-authorizations/token":
 					response := test.pollResponses[polls]
 					polls++
 					switch response {
 					case "slow_down", "authorization_rejected", "authorization_expired":
-						problem(writer, http.StatusBadRequest, response, "Device authorization was not approved.", `{}`)
+						status := http.StatusBadRequest
+						if response == "slow_down" {
+							status = http.StatusTooManyRequests
+						}
+						problem(writer, status, response, "Device authorization was not approved.", `{}`)
 					case "approved":
 						io.WriteString(writer, `{"data":{"status":"approved","access_token":"dr_cp_login_token","token_type":"Bearer"},"meta":[]}`)
 					default:
@@ -226,6 +240,25 @@ func TestLoginDeviceFlowPolling(t *testing.T) {
 				t.Fatalf("stderr = %q, want code %q", errorOutput.String(), test.wantCode)
 			}
 		})
+	}
+}
+
+func TestLoginJSONKeepsPollingSecretPrivate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/device-authorizations" || r.Method != http.MethodPost {
+			t.Errorf("request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{"device_code":"PRIVATE-POLL-SECRET","user_code":"PUBLIC-CODE","verification_url":"https://example.test/approve","expires_at":"2030-01-01T00:00:00Z","interval_seconds":5},"meta":[]}`)
+	}))
+	defer server.Close()
+	var out, errOut bytes.Buffer
+	d := Dependencies{Output: &out, ErrorOutput: &errOut, Environment: map[string]string{"HOME": t.TempDir()}, HTTPClient: server.Client(), Now: func() time.Time { return time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC) }, Sleep: func(context.Context, time.Duration) error { return context.Canceled }, IsInteractive: func() bool { return false }}
+	_ = Run(context.Background(), []string{"--host", server.URL, "--json", "login"}, d)
+	if !strings.Contains(out.String(), "PUBLIC-CODE") || strings.Contains(out.String(), "PRIVATE-POLL-SECRET") || strings.Contains(errOut.String(), "PRIVATE-POLL-SECRET") {
+		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
 	}
 }
 

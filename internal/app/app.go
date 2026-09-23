@@ -49,7 +49,10 @@ Commands:
   lock DAEMON
   lock status|setup|change|recover DAEMON
   lock pair DAEMON [--forget]
-  ssh enable|disable|keys ...
+  ssh WORKSPACE-UUID | ssh enable|disable|keys ...
+  ssh-known-hosts WORKSPACE-UUID
+  ssh-proxy WORKSPACE-UUID
+  sync push|pull WORKSPACE-UUID LOCAL-FOLDER [--remote PATH] [--identity PATH] [--dry-run] [--delete]
   ssh-config DAEMON [--identity PATH] [--remove]
   ide DAEMON --editor code|cursor|zed|jetbrains [--folder NAME] [--cached]
 
@@ -58,6 +61,8 @@ Global options: --json --quiet --host URL --no-color --request-id ID --version
 Workspace layout: DAEMONS_WORKSPACE_ROOT (default /home/dr-agent/workspace) DAEMONS_UPLOAD_FOLDER (default uploads)`
 
 type Dependencies struct {
+	// sshGatewayURL is set only by the in-package local gateway harness.
+	sshGatewayURL     string
 	Input             io.Reader
 	Output            io.Writer
 	ErrorOutput       io.Writer
@@ -107,6 +112,10 @@ func Run(ctx context.Context, arguments []string, dependencies Dependencies) int
 	if commandArguments[0] == "--version" || commandArguments[0] == "-v" {
 		fmt.Fprintln(dependencies.Output, dependencies.Version)
 		return 0
+	}
+	if commandArguments[0] == "ssh-proxy" || commandArguments[0] == "ssh-known-hosts" {
+		// OpenSSH consumes stdout as protocol bytes or one known_hosts line.
+		options.JSON = false
 	}
 
 	result := dispatch(ctx, commandArguments, options, dependencies)

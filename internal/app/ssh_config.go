@@ -61,8 +61,11 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 	if !access.Data.Enabled || !access.Data.Reconciled {
 		return errs.New("ssh_not_ready", "SSH is not enabled and reconciled for this daemon.", 1)
 	}
-	if unsafeSSH(access.Data.HostKey) || unsafeSSH(access.Data.HostKeyFingerprint) {
+	if !validHostKey(access.Data.HostKey) || unsafeSSH(access.Data.HostKeyFingerprint) {
 		return errs.New("invalid_response", "The SSH export contains unsafe fields.", 1)
+	}
+	if e := pinnedHostKey(f.Positionals[0], access.Data.HostKey, base, d.Environment); e != nil {
+		return e
 	}
 	identity := f.Values["--identity"]
 	if identity == "" {
@@ -72,7 +75,7 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 		return errs.New("usage_error", "Identity paths cannot contain newlines.", 2)
 	}
 	hash := originHash(base)
-	alias := "dr-" + hash + "-" + f.Positionals[0]
+	alias := sshAlias(f.Positionals[0])
 	managed := filepath.Join(root, hash)
 	if e = secureDir(managed); e != nil {
 		return e
@@ -87,7 +90,7 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 	}
 	config := filepath.Join(managed, "config")
 	mapPath := filepath.Join(managed, "aliases.json")
-	stanza := fmt.Sprintf("# daemons-run daemon %s\nHost %s\n    HostName %s\n    Port %s\n    User root\n    ProxyCommand %s ssh-proxy %s\n    IdentityFile %s\n    IdentitiesOnly yes\n    HostKeyAlias %s\n    UserKnownHostsFile %s\n    StrictHostKeyChecking yes\n    ForwardAgent no\n    ForwardX11 no\n    ServerAliveInterval 30\n    ServerAliveCountMax 3\n", f.Positionals[0], alias, client.SSHHostname, client.SSHPort, sshQuote(executablePath()), f.Positionals[0], sshQuote(identity), "dr-"+f.Positionals[0], sshQuote(known))
+	stanza := renderSSHConfig(f.Positionals[0], identity)
 	prior, _ := os.ReadFile(config)
 	if e = atomicPrivate(config, replaceManagedStanza(string(prior), f.Positionals[0], stanza)); e != nil {
 		return e
@@ -119,6 +122,9 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 		fmt.Fprintln(d.Output, alias)
 	}
 	return nil
+}
+func renderSSHConfig(id, identity string) string {
+	return fmt.Sprintf("# daemons-run daemon %s\nHost %s\n    HostName %s\n    Port %s\n    User %s\n    ProxyCommand npx --yes daemonsrun@latest ssh-proxy %s\n    KnownHostsCommand npx --yes daemonsrun@latest ssh-known-hosts %s\n    IdentityFile %s\n    IdentitiesOnly yes\n    HostKeyAlias %s\n    UserKnownHostsFile /dev/null\n    GlobalKnownHostsFile /dev/null\n    StrictHostKeyChecking yes\n    ForwardAgent no\n    ForwardX11 no\n    ServerAliveInterval 30\n    ServerAliveCountMax 3\n", id, sshAlias(id), client.SSHHostname, client.SSHPort, sshUser, id, id, sshQuote(identity), sshAlias(id))
 }
 func replaceManagedStanza(old, daemon, stanza string) []byte {
 	marker := "# daemons-run daemon " + daemon + "\n"

@@ -79,6 +79,8 @@ var commandRegistry = map[string]commandHandler{
 	"ssh":                        ssh,
 	"ssh-config":                 errorHandler(sshConfig),
 	"ssh-proxy":                  sshProxy,
+	"ssh-known-hosts":            sshKnownHosts,
+	"sync":                       syncCommand,
 	"ide":                        errorHandler(ide),
 	"push":                       errorHandler(repositoryPush),
 }

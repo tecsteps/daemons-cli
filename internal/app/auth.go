@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +17,6 @@ import (
 
 var defaultScopes = []string{
 	"control-plane:discover",
-	"servers:read",
 	"daemons:read",
 	"daemons:write",
 	"daemons:destroy",
@@ -81,13 +81,14 @@ func login(ctx context.Context, arguments []string, options globalOptions, depen
 	if err != nil {
 		return err
 	}
-	if authorization.Data.DeviceCode == "" || authorization.Data.VerificationURL == "" {
+	if authorization.Data.DeviceCode == "" || authorization.Data.UserCode == "" || authorization.Data.VerificationURL == "" {
 		return errs.New("invalid_device_authorization", "The Control Plane returned an invalid device authorization.", 1)
 	}
 	if options.JSON {
-		writeCanonicalJSON(dependencies.Output, authorization.Raw)
+		public, _ := json.Marshal(map[string]any{"data": map[string]any{"user_code": authorization.Data.UserCode, "verification_url": authorization.Data.VerificationURL, "expires_at": authorization.Data.ExpiresAt, "interval_seconds": authorization.Data.IntervalSeconds}, "meta": map[string]any{}})
+		writeCanonicalJSON(dependencies.Output, public)
 	} else {
-		fmt.Fprintf(dependencies.Output, "Open %s\nEnter device code: %s\nWaiting for approval...\n", authorization.Data.VerificationURL, authorization.Data.DeviceCode)
+		fmt.Fprintf(dependencies.Output, "Open %s\nCode: %s\nWaiting for approval...\n", authorization.Data.VerificationURL, authorization.Data.UserCode)
 	}
 	if dependencies.IsInteractive() && dependencies.OpenURL != nil && safeBrowserURL(authorization.Data.VerificationURL) {
 		if openErr := dependencies.OpenURL(authorization.Data.VerificationURL); openErr != nil {

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/tecsteps/daemons-cli/internal/errs"
 )
@@ -223,6 +224,7 @@ func (response *OperationList) setRaw(raw json.RawMessage) { response.Raw = raw 
 type DeviceAuthorization struct {
 	Data struct {
 		DeviceCode      string  `json:"device_code"`
+		UserCode        string  `json:"user_code"`
 		VerificationURL string  `json:"verification_url"`
 		ExpiresAt       string  `json:"expires_at"`
 		IntervalSeconds WireInt `json:"interval_seconds"`
@@ -269,7 +271,13 @@ func (c *Client) CreateDeviceAuthorization(ctx context.Context, scopes []string,
 		switch {
 		case result.Data.DeviceCode == "":
 			return DeviceAuthorization{}, invalidResponse("data.device_code")
+		case result.Data.UserCode == "":
+			return DeviceAuthorization{}, invalidResponse("data.user_code")
+		case result.Data.UserCode == result.Data.DeviceCode:
+			return DeviceAuthorization{}, invalidResponse("data.user_code")
 		case result.Data.VerificationURL == "":
+			return DeviceAuthorization{}, invalidResponse("data.verification_url")
+		case strings.Contains(result.Data.VerificationURL, result.Data.DeviceCode):
 			return DeviceAuthorization{}, invalidResponse("data.verification_url")
 		}
 	}
@@ -278,7 +286,7 @@ func (c *Client) CreateDeviceAuthorization(ctx context.Context, scopes []string,
 
 func (c *Client) PollDeviceAuthorization(ctx context.Context, code string) (DeviceAuthorizationStatus, error) {
 	var result DeviceAuthorizationStatus
-	err := c.doJSON(ctx, http.MethodGet, "/device-authorizations/"+url.PathEscape(code), nil, false, "", false, &result)
+	err := c.doJSON(ctx, http.MethodPost, "/device-authorizations/token", map[string]string{"device_code": code}, false, "", false, &result)
 	if err == nil && result.Data.Status == "" {
 		return DeviceAuthorizationStatus{}, invalidResponse("data.status")
 	}

@@ -76,7 +76,7 @@ func TestSSHConfigWritesDNSOnlyHostKeepaliveAndProxyCommand(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		io.WriteString(w, `{"data":{"enabled":true,"reconciled":true,"host_key":"ssh-ed25519 AAAA","host_key_fingerprint":"SHA256:x","keys":[]},"meta":{}}`)
+		io.WriteString(w, `{"data":{"enabled":true,"reconciled":true,"host_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","host_key_fingerprint":"SHA256:x","keys":[]},"meta":{}}`)
 	}))
 	defer server.Close()
 
@@ -112,7 +112,9 @@ func TestSSHConfigWritesDNSOnlyHostKeepaliveAndProxyCommand(t *testing.T) {
 		"ssh-proxy " + daemon,
 		"ServerAliveInterval 30",
 		"ServerAliveCountMax 3",
-		"HostKeyAlias dr-" + daemon,
+		"HostKeyAlias daemon-" + daemon,
+		"User dr-agent",
+		"KnownHostsCommand npx --yes daemonsrun@latest ssh-known-hosts " + daemon,
 	} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("missing %q in %q", want, config)

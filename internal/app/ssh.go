@@ -13,11 +13,11 @@ import (
 
 func ssh(ctx context.Context, args []string, opt globalOptions, d Dependencies) runResult {
 	if helpRequested(args) {
-		fmt.Fprintln(d.Output, "Usage: daemons ssh enable|disable|keys ...")
+		fmt.Fprintln(d.Output, "Usage: daemons ssh WORKSPACE-UUID | ssh enable|disable|keys ...")
 		return runResult{}
 	}
 	if len(args) == 0 {
-		return runResultFor(errs.New("usage_error", "Usage: daemons ssh enable|disable|keys ...", 2))
+		return runResultFor(errs.New("usage_error", "Usage: daemons ssh WORKSPACE-UUID | ssh enable|disable|keys ...", 2))
 	}
 	switch args[0] {
 	case "enable":
@@ -26,6 +26,9 @@ func ssh(ctx context.Context, args []string, opt globalOptions, d Dependencies) 
 		return sshDisable(ctx, args[1:], opt, d)
 	case "keys":
 		return sshKeys(ctx, args[1:], opt, d)
+	}
+	if len(args) == 1 && uuidPattern.MatchString(args[0]) {
+		return sshShell(ctx, args[0], opt, d)
 	}
 	return runResultFor(errs.New("usage_error", "Usage: daemons ssh enable|disable|keys ...", 2))
 }

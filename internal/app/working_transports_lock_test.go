@@ -261,6 +261,9 @@ func TestWorkingTransportCommandsProveTheDeviceGrant(t *testing.T) {
 				}
 				var output, errorOutput bytes.Buffer
 				deps := phaseOneDependencies(t, server.Client(), &output, &errorOutput)
+				if !command.files {
+					deps.sshGatewayURL = "ws" + strings.TrimPrefix(server.URL, "http") + "/ssh"
+				}
 				deps.Input = bytes.NewReader(nil)
 				deps.Now = func() time.Time { return time.UnixMilli(nowMs).UTC() }
 				storePath := filepath.Join(t.TempDir(), "workspace-lock.json")

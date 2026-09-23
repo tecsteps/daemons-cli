@@ -35,12 +35,12 @@ func sshProxy(ctx context.Context, args []string, opt globalOptions, d Dependenc
 	if e != nil {
 		return runResultFor(e)
 	}
-	gateway := ticket.Data.GatewayURL
-	if gateway == "" {
-		gateway = api.GatewayURL()
+	gateway := api.GatewayURL()
+	if d.sshGatewayURL != "" {
+		gateway = d.sshGatewayURL
 	}
-	if e = api.ValidateGatewayURL(gateway); e != nil {
-		return runResultFor(e)
+	if ticket.Data.GatewayURL != "" && ticket.Data.GatewayURL != gateway {
+		return runResultFor(errs.New("gateway_url_mismatch", "The Control Plane named an SSH gateway outside the compiled allowlist.", 1))
 	}
 	prove, e := lockResponder(args[0], "ssh.connect", args[0], opt, d)
 	if e != nil {
