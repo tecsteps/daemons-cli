@@ -13,7 +13,9 @@ import (
 
 	"github.com/tecsteps/daemons-cli/internal/client"
 	"github.com/tecsteps/daemons-cli/internal/errs"
+	"github.com/tecsteps/daemons-cli/internal/terminal"
 	xssh "golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 )
 
 const sshUser = "dr-agent"
@@ -152,10 +154,54 @@ func withKnownHosts(ctx context.Context, id string, opt globalOptions, d Depende
 }
 
 func sshShell(ctx context.Context, id string, opt globalOptions, d Dependencies) runResult {
+	var savedState *term.State
+	ttyOutput := d.Stdout != nil && term.IsTerminal(int(d.Stdout.Fd()))
+	if d.Stdin != nil && d.Stdout != nil && term.IsTerminal(int(d.Stdin.Fd())) && term.IsTerminal(int(d.Stdout.Fd())) {
+		savedState, _ = term.GetState(int(d.Stdin.Fd()))
+	}
+	defer func() {
+		if ttyOutput {
+			if savedState != nil {
+				if err := term.Restore(int(d.Stdin.Fd()), savedState); err != nil {
+					fmt.Fprintln(d.ErrorOutput, "Warning: SSH terminal restore failed [condition=terminal_restore expected=saved_terminal_state observed=restore_error].")
+				}
+			}
+			_, _ = fmt.Fprint(d.Output, "\x1b[<u")
+		}
+	}()
+
 	return withKnownHosts(ctx, id, opt, d, func(known string) runResult {
 		args := append(sshClientOptions(id, known, ""), sshUser+"@"+sshAlias(id))
-		return runExternal(ctx, d, "ssh", args...)
+		return runExternalSSH(ctx, d, "ssh", args...)
 	})
+}
+
+func runExternalSSH(ctx context.Context, d Dependencies, name string, args ...string) runResult {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = d.Input, d.Output, d.ErrorOutput
+	signals, stopSignals := terminal.WatchSignals()
+	defer stopSignals()
+	if err := cmd.Start(); err != nil {
+		return runResultFor(errs.New("command_unavailable", fmt.Sprintf("Could not start %s: %v", name, err), 1))
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	for {
+		select {
+		case err := <-done:
+			if err == nil {
+				return runResult{}
+			}
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				return runResult{code: exit.ExitCode()}
+			}
+			return runResultFor(errs.New("ssh_failed", "The SSH client did not exit cleanly.", 1))
+		case signal := <-signals:
+			_ = cmd.Process.Signal(signal)
+		}
+	}
 }
 
 type syncOptions struct {

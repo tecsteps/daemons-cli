@@ -62,19 +62,20 @@ Workspace layout: DAEMONS_WORKSPACE_ROOT (default /home/dr-agent/workspace) DAEM
 
 type Dependencies struct {
 	// sshGatewayURL is set only by the in-package local gateway harness.
-	sshGatewayURL     string
-	Input             io.Reader
-	Output            io.Writer
-	ErrorOutput       io.Writer
-	Stdin             *os.File
-	Stdout            *os.File
-	Environment       map[string]string
-	HTTPClient        *http.Client
-	Now               func() time.Time
-	Sleep             func(context.Context, time.Duration) error
-	Version           string
-	IsInteractive     func() bool
-	NewIdempotencyKey func() (string, error)
+	sshGatewayURL       string
+	Input               io.Reader
+	Output              io.Writer
+	ErrorOutput         io.Writer
+	Stdin               *os.File
+	Stdout              *os.File
+	Environment         map[string]string
+	HTTPClient          *http.Client
+	Now                 func() time.Time
+	Sleep               func(context.Context, time.Duration) error
+	Version             string
+	IsInteractive       func() bool
+	IsOutputInteractive func() bool
+	NewIdempotencyKey   func() (string, error)
 	// OpenURL opens a safe verification or approval URL in the user's browser.
 	// Device login opens directly; confirmation flows first ask the user.
 	OpenURL func(string) error
@@ -119,6 +120,17 @@ func Run(ctx context.Context, arguments []string, dependencies Dependencies) int
 	}
 
 	result := dispatch(ctx, commandArguments, options, dependencies)
+	if result.err != nil && errs.Code(result.err) == "authentication_required" && dependencies.IsInteractive() && dependencies.IsOutputInteractive() {
+		loginOptions := globalOptions{Host: options.Host, CredentialsFile: options.CredentialsFile}
+		if loginOptions.Host == "" {
+			loginOptions.Host = dependencies.Environment["DAEMONS_HOST"]
+		}
+		if err := login(ctx, nil, loginOptions, dependencies); err != nil {
+			writeError(dependencies, false, err)
+			return errs.ExitCode(err)
+		}
+		result = dispatch(ctx, commandArguments, options, dependencies)
+	}
 	if result.err != nil && !result.reported {
 		writeError(dependencies, options.JSON, result.err)
 	}
@@ -168,6 +180,11 @@ func defaults(dependencies Dependencies) Dependencies {
 	if dependencies.IsInteractive == nil {
 		dependencies.IsInteractive = func() bool {
 			return dependencies.Stdin != nil && term.IsTerminal(int(dependencies.Stdin.Fd()))
+		}
+	}
+	if dependencies.IsOutputInteractive == nil {
+		dependencies.IsOutputInteractive = func() bool {
+			return dependencies.Stdout != nil && term.IsTerminal(int(dependencies.Stdout.Fd()))
 		}
 	}
 	if dependencies.OpenURL == nil {

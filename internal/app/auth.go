@@ -301,7 +301,11 @@ func authenticatedClient(options globalOptions, dependencies Dependencies) (*cli
 		credential, loadErr := store.Load(normalized)
 		if loadErr != nil {
 			if errors.Is(loadErr, fs.ErrNotExist) {
-				return nil, "", store, errs.New("authentication_required", "No Control Plane token is stored for "+normalized+". Run daemons login --host "+normalized+".", 3)
+				hint := "Run npx daemonsrun@latest login."
+				if normalized != client.DefaultBaseURL {
+					hint = "Run npx daemonsrun@latest login --host " + normalized + "."
+				}
+				return nil, "", store, errs.New("authentication_required", "No Control Plane token is stored for "+normalized+". "+hint, 3)
 			}
 			return nil, "", store, errs.New("credential_read_failed", "Could not read the protected credential file.", 3)
 		}

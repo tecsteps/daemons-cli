@@ -129,6 +129,73 @@ func TestLoginWhoamiListAndLogout(t *testing.T) {
 	}
 }
 
+func TestInteractiveMissingTokenStartsLoginAndRetriesCommand(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("X-Daemons-Api-Version", "v1")
+		requests = append(requests, request.Method+" "+request.URL.Path)
+		switch request.URL.Path {
+		case "/api/v1/device-authorizations":
+			writer.WriteHeader(http.StatusCreated)
+			io.WriteString(writer, `{"data":{"device_code":"DEVICE","user_code":"USER","verification_url":"https://example.test/approve","expires_at":"2030-01-01T00:00:00Z","interval_seconds":1},"meta":{}}`)
+		case "/api/v1/device-authorizations/token":
+			io.WriteString(writer, `{"data":{"status":"approved","access_token":"dr_cp_autologin"},"meta":{}}`)
+		case "/api/v1/me":
+			if request.Header.Get("Authorization") != "Bearer dr_cp_autologin" {
+				t.Errorf("authorization = %q", request.Header.Get("Authorization"))
+			}
+			io.WriteString(writer, `{"data":{"account":{"id":"user","email":"dev@example.test","control_plane_api_enabled":true},"token":{"id":"token","expires_at":"2030-01-01T00:00:00Z"}},"meta":{}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	directory := t.TempDir()
+	var output, errorOutput bytes.Buffer
+	code := Run(context.Background(), []string{"--host", server.URL, "--credentials-file", filepath.Join(directory, "credentials"), "whoami"}, Dependencies{
+		Output: &output, ErrorOutput: &errorOutput,
+		Environment: map[string]string{"HOME": directory, "TERM": "xterm-256color"},
+		HTTPClient:  server.Client(), Now: func() time.Time { return time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC) },
+		Sleep:         func(context.Context, time.Duration) error { return nil },
+		IsInteractive: func() bool { return true }, IsOutputInteractive: func() bool { return true },
+		OpenURL: func(string) error { return nil },
+	})
+	if code != 0 || !strings.Contains(output.String(), "Logged in as dev@example.test") || !strings.HasSuffix(output.String(), "dev@example.test\n") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+	want := []string{"POST /api/v1/device-authorizations", "POST /api/v1/device-authorizations/token", "GET /api/v1/me", "GET /api/v1/me"}
+	if !slices.Equal(requests, want) {
+		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+}
+
+func TestMissingTokenHintUsesDefaultPackageCommand(t *testing.T) {
+	directory := t.TempDir()
+	_, _, _, err := authenticatedClient(globalOptions{}, Dependencies{Environment: map[string]string{"HOME": directory}})
+	if err == nil || !strings.Contains(err.Error(), "Run npx daemonsrun@latest login.") || strings.Contains(err.Error(), "--host") {
+		t.Fatalf("default-host error = %v", err)
+	}
+	_, _, _, err = authenticatedClient(globalOptions{Host: "https://staging.example"}, Dependencies{Environment: map[string]string{"HOME": directory}})
+	if err == nil || !strings.Contains(err.Error(), "Run npx daemonsrun@latest login --host https://staging.example/api/v1.") {
+		t.Fatalf("custom-host error = %v", err)
+	}
+}
+
+func TestInteractiveMissingTokenRequiresTTYOnBothStreams(t *testing.T) {
+	directory := t.TempDir()
+	var output, errorOutput bytes.Buffer
+	code := Run(context.Background(), []string{"whoami"}, Dependencies{
+		Output: &output, ErrorOutput: &errorOutput,
+		Environment:   map[string]string{"HOME": directory},
+		IsInteractive: func() bool { return true }, IsOutputInteractive: func() bool { return false },
+	})
+	if code != 3 || output.Len() != 0 || !strings.Contains(errorOutput.String(), "npx daemonsrun@latest login") {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+}
+
 func TestLoginDeviceFlowPolling(t *testing.T) {
 	tests := []struct {
 		name          string
