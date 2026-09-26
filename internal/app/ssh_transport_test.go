@@ -39,12 +39,12 @@ func TestSyncArgumentParsing(t *testing.T) {
 }
 
 func TestSSHConfigRenderingAndExclusions(t *testing.T) {
-	config := renderSSHConfig(testWorkspace, "/tmp/my key")
+	config := renderSSHConfig(testWorkspace, "/tmp/my key", "/tmp/daemons cli")
 	for _, want := range []string{
 		"Host daemon-" + testWorkspace,
 		"User dr-agent",
-		"ProxyCommand npx --yes daemonsrun@latest ssh-proxy " + testWorkspace,
-		"KnownHostsCommand npx --yes daemonsrun@latest ssh-known-hosts " + testWorkspace,
+		"ProxyCommand '/tmp/daemons cli' ssh-proxy " + testWorkspace,
+		"KnownHostsCommand '/tmp/daemons cli' ssh-known-hosts " + testWorkspace,
 		"HostKeyAlias daemon-" + testWorkspace,
 		"StrictHostKeyChecking yes",
 		"UserKnownHostsFile /dev/null",
@@ -58,6 +58,18 @@ func TestSSHConfigRenderingAndExclusions(t *testing.T) {
 	}
 	if !slices.Equal(syncExclusions(), []string{"--filter=:- .gitignore", "--exclude=node_modules/", "--exclude=vendor/"}) {
 		t.Fatalf("exclusions = %v", syncExclusions())
+	}
+}
+
+func TestSyncRemoteShellScriptKeepsArgumentsSeparate(t *testing.T) {
+	script := syncRemoteShellScript([]string{"-o", "ProxyCommand=/tmp/daemons cli ssh-proxy aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "-i", "/tmp/my 'key'"})
+	if !strings.HasPrefix(script, "#!/bin/sh\nexec ssh ") || !strings.HasSuffix(script, " \"$@\"\n") {
+		t.Fatalf("invalid remote shell script: %q", script)
+	}
+	for _, want := range []string{"'-o'", "'ProxyCommand=/tmp/daemons cli ssh-proxy aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'", "'/tmp/my '\\''key'\\'''"} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("missing safely quoted argument %q", want)
+		}
 	}
 }
 

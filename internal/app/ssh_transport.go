@@ -253,6 +253,14 @@ func syncExclusions() []string {
 	return []string{"--filter=:- .gitignore", "--exclude=node_modules/", "--exclude=vendor/"}
 }
 
+func syncRemoteShellScript(sshArgs []string) string {
+	parts := []string{"#!/bin/sh\nexec ssh"}
+	for _, argument := range sshArgs {
+		parts = append(parts, sshQuote(argument))
+	}
+	return strings.Join(parts, " ") + " \"$@\"\n"
+}
+
 func syncCommand(ctx context.Context, args []string, opt globalOptions, d Dependencies) runResult {
 	if helpRequested(args) {
 		fmt.Fprintln(d.Output, "Usage: daemons sync push|pull WORKSPACE-UUID LOCAL-FOLDER [--remote PATH] [--identity PATH] [--dry-run] [--delete]")
@@ -284,9 +292,17 @@ func syncCommand(ctx context.Context, args []string, opt globalOptions, d Depend
 	}
 	return withKnownHosts(ctx, f.id, opt, d, func(known string) runResult {
 		sshArgs := sshClientOptions(f.id, known, f.identity)
-		parts := append([]string{"ssh"}, sshArgs...)
-		for i, p := range parts {
-			parts[i] = sshQuote(p)
+		// macOS openrsync does not parse quoted arguments in -e like GNU rsync.
+		// Give it a single absolute executable path and let a private shell script
+		// pass the already validated SSH options as separate arguments.
+		rshDir, err := os.MkdirTemp("/tmp", "daemons-rsh-")
+		if err != nil {
+			return runResultFor(err)
+		}
+		defer os.RemoveAll(rshDir)
+		rsh := filepath.Join(rshDir, "ssh")
+		if err := os.WriteFile(rsh, []byte(syncRemoteShellScript(sshArgs)), 0700); err != nil {
+			return runResultFor(err)
 		}
 		rsArgs := append([]string{"-az", "--human-readable", "--progress"}, syncExclusions()...)
 		if f.dryRun {
@@ -300,7 +316,7 @@ func syncCommand(ctx context.Context, args []string, opt globalOptions, d Depend
 		}
 		local := strings.TrimRight(f.local, "/") + "/"
 		remote := sshUser + "@" + sshAlias(f.id) + ":" + f.remote + "/"
-		rsArgs = append(rsArgs, "-e", strings.Join(parts, " "), "--")
+		rsArgs = append(rsArgs, "-e", rsh, "--")
 		if f.direction == "push" {
 			rsArgs = append(rsArgs, local, remote)
 		} else {

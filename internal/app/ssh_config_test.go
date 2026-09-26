@@ -105,6 +105,10 @@ func TestSSHConfigWritesDNSOnlyHostKeepaliveAndProxyCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := string(body)
+	helper, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"HostName ssh.daemons.run",
 		"Port 2222",
@@ -114,7 +118,8 @@ func TestSSHConfigWritesDNSOnlyHostKeepaliveAndProxyCommand(t *testing.T) {
 		"ServerAliveCountMax 3",
 		"HostKeyAlias daemon-" + daemon,
 		"User dr-agent",
-		"KnownHostsCommand npx --yes daemonsrun@latest ssh-known-hosts " + daemon,
+		"ProxyCommand " + sshQuote(helper) + " ssh-proxy " + daemon,
+		"KnownHostsCommand " + sshQuote(helper) + " ssh-known-hosts " + daemon,
 	} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("missing %q in %q", want, config)
@@ -122,5 +127,8 @@ func TestSSHConfigWritesDNSOnlyHostKeepaliveAndProxyCommand(t *testing.T) {
 	}
 	if strings.Contains(config, "HostName ignored") {
 		t.Fatal("still writing ignored hostname")
+	}
+	if strings.Contains(config, "npx") || strings.Contains(config, "/bin/sh") || !filepath.IsAbs(helper) {
+		t.Fatal("generated helper command is not absolute")
 	}
 }

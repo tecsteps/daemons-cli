@@ -74,6 +74,10 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 	if strings.ContainsAny(identity, "\r\n") {
 		return errs.New("usage_error", "Identity paths cannot contain newlines.", 2)
 	}
+	helper, e := os.Executable()
+	if e != nil || !filepath.IsAbs(helper) || strings.ContainsAny(helper, "\r\n") {
+		return errs.New("ssh_config_unavailable", "The CLI executable must have an absolute path to install SSH config.", 1)
+	}
 	hash := originHash(base)
 	alias := sshAlias(f.Positionals[0])
 	managed := filepath.Join(root, hash)
@@ -90,7 +94,7 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 	}
 	config := filepath.Join(managed, "config")
 	mapPath := filepath.Join(managed, "aliases.json")
-	stanza := renderSSHConfig(f.Positionals[0], identity)
+	stanza := renderSSHConfig(f.Positionals[0], identity, helper)
 	prior, _ := os.ReadFile(config)
 	if e = atomicPrivate(config, replaceManagedStanza(string(prior), f.Positionals[0], stanza)); e != nil {
 		return e
@@ -123,8 +127,8 @@ func sshConfig(ctx context.Context, args []string, opt globalOptions, d Dependen
 	}
 	return nil
 }
-func renderSSHConfig(id, identity string) string {
-	return fmt.Sprintf("# daemons-run daemon %s\nHost %s\n    HostName %s\n    Port %s\n    User %s\n    ProxyCommand npx --yes daemonsrun@latest ssh-proxy %s\n    KnownHostsCommand npx --yes daemonsrun@latest ssh-known-hosts %s\n    IdentityFile %s\n    IdentitiesOnly yes\n    HostKeyAlias %s\n    UserKnownHostsFile /dev/null\n    GlobalKnownHostsFile /dev/null\n    StrictHostKeyChecking yes\n    ForwardAgent no\n    ForwardX11 no\n    ServerAliveInterval 30\n    ServerAliveCountMax 3\n", id, sshAlias(id), client.SSHHostname, client.SSHPort, sshUser, id, id, sshQuote(identity), sshAlias(id))
+func renderSSHConfig(id, identity, helper string) string {
+	return fmt.Sprintf("# daemons-run daemon %s\nHost %s\n    HostName %s\n    Port %s\n    User %s\n    ProxyCommand %s ssh-proxy %s\n    KnownHostsCommand %s ssh-known-hosts %s\n    IdentityFile %s\n    IdentitiesOnly yes\n    HostKeyAlias %s\n    UserKnownHostsFile /dev/null\n    GlobalKnownHostsFile /dev/null\n    StrictHostKeyChecking yes\n    ForwardAgent no\n    ForwardX11 no\n    ServerAliveInterval 30\n    ServerAliveCountMax 3\n", id, sshAlias(id), client.SSHHostname, client.SSHPort, sshUser, sshQuote(helper), id, sshQuote(helper), id, sshQuote(identity), sshAlias(id))
 }
 func replaceManagedStanza(old, daemon, stanza string) []byte {
 	marker := "# daemons-run daemon " + daemon + "\n"
